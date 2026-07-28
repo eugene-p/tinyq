@@ -44,7 +44,7 @@ async function main() {
     line('queue', 'add', `job=${job.id}`)
   }
 
-  await whenIdle(drainQueue)
+  await whenIdle(drainQueue, { timeoutMs: 10_000 })
   line('idle', 'done', `drained=${drained}  size=${drainQueue.size()}`)
 
   // --- phase 2: SIGTERM-style stop — finish in-flight, keep remainder ---
@@ -83,7 +83,7 @@ async function main() {
     `running=${queue.isRunning()}  processing=${queue.isProcessing()}  size=${queue.size()}`,
   )
 
-  const stopping = gracefulStop(queue)
+  const stopping = gracefulStop(queue, { timeoutMs: 10_000 })
   release()
   await stopping
 

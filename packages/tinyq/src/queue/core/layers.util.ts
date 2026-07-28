@@ -3,9 +3,9 @@
  * Uses `Symbol.for` so checks remain valid across duplicate package copies.
  */
 
-export const WORKER_LAYER = Symbol.for('qkitt:worker-layer')
-export const DLQ_LAYER = Symbol.for('qkitt:dlq-layer')
-export const LOOP_LAYER = Symbol.for('qkitt:loop-layer')
+export const WORKER_LAYER = Symbol.for('tq:worker-layer')
+export const DLQ_LAYER = Symbol.for('tq:dlq-layer')
+export const LOOP_LAYER = Symbol.for('tq:loop-layer')
 
 type QueueLayerBrand =
     | typeof WORKER_LAYER

@@ -19,7 +19,7 @@ export {
     InvalidWorkerOptionError,
     LifecycleTimeoutError,
     LoopEnqueueError,
-    QKITT_QUEUE_KEY,
+    TQ_KEY,
     QueueFullError,
     gracefulStop,
     whenIdle,

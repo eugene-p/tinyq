@@ -2,17 +2,17 @@ import { describe, expect, it } from 'vitest'
 import {
     buildLoopQueueMeta,
     getLoopHops,
-    QKITT_QUEUE_KEY,
+    TQ_KEY,
     queueMetaEqual,
     stampLoopHops,
 } from './hop-meta.util'
 
 describe('getLoopHops', () => {
-    it('reads __qkittQueue.loop[name].hops', () => {
+    it('reads __tq.loop[name].hops', () => {
         expect(
             getLoopHops(
                 {
-                    [QKITT_QUEUE_KEY]: { loop: { jobs: { hops: 3 } } },
+                    [TQ_KEY]: { loop: { jobs: { hops: 3 } } },
                 },
                 'jobs',
             ),
@@ -24,7 +24,7 @@ describe('getLoopHops', () => {
         expect(getLoopHops(null, 'jobs')).toBeUndefined()
         expect(
             getLoopHops(
-                { [QKITT_QUEUE_KEY]: { loop: { jobs: { hops: 'x' } } } },
+                { [TQ_KEY]: { loop: { jobs: { hops: 'x' } } } },
                 'jobs',
             ),
         ).toBeUndefined()
@@ -49,38 +49,38 @@ describe('stampLoopHops', () => {
         expect(stamped).toEqual({
             id: 'a',
             reason: 'x',
-            [QKITT_QUEUE_KEY]: { loop: { jobs: { hops: 1 } } },
+            [TQ_KEY]: { loop: { jobs: { hops: 1 } } },
         })
     })
 
     it('wraps non-plain values', () => {
         expect(stampLoopHops(9, 9, 'n', 1)).toEqual({
             value: 9,
-            [QKITT_QUEUE_KEY]: { loop: { n: { hops: 1 } } },
+            [TQ_KEY]: { loop: { n: { hops: 1 } } },
         })
     })
 
     it('preserves sibling loop names from original', () => {
         const original = {
             id: 'a',
-            [QKITT_QUEUE_KEY]: {
+            [TQ_KEY]: {
                 loop: { other: { hops: 5 }, jobs: { hops: 1 } },
             },
         }
         const stamped = stampLoopHops(original, original, 'jobs', 2) as {
-            [QKITT_QUEUE_KEY]: { loop: Record<string, { hops: number }> }
+            [TQ_KEY]: { loop: Record<string, { hops: number }> }
         }
-        expect(stamped[QKITT_QUEUE_KEY].loop).toEqual({
+        expect(stamped[TQ_KEY].loop).toEqual({
             other: { hops: 5 },
             jobs: { hops: 2 },
         })
     })
 
-    it('overwrites user __qkittQueue on mapped result', () => {
+    it('overwrites user __tq on mapped result', () => {
         const original = { id: 'a' }
         const mapped = {
             id: 'a',
-            [QKITT_QUEUE_KEY]: { loop: { jobs: { hops: 99 } } },
+            [TQ_KEY]: { loop: { jobs: { hops: 99 } } },
         }
         const stamped = stampLoopHops(mapped, original, 'jobs', 1)
         expect(getLoopHops(stamped, 'jobs')).toBe(1)

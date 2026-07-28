@@ -31,7 +31,7 @@ describe('gracefulStop', () => {
         await Promise.resolve()
         expect(queue.isProcessing()).toBe(true)
 
-        const stopping = gracefulStop(queue)
+        const stopping = gracefulStop(queue, { timeoutMs: 5_000 })
         release()
         await stopping
 
@@ -47,7 +47,7 @@ describe('gracefulStop', () => {
             autoStart: false,
         })
         queue.enqueue(1)
-        await gracefulStop(queue)
+        await gracefulStop(queue, { timeoutMs: 5_000 })
         expect(queue.isRunning()).toBe(false)
         expect(queue.isProcessing()).toBe(false)
         expect(queue.size()).toBe(1)
@@ -65,7 +65,7 @@ describe('gracefulStop', () => {
         queue.enqueue('a')
         await Promise.resolve()
 
-        const stopping = queue.gracefulStop()
+        const stopping = queue.gracefulStop({ timeoutMs: 5_000 })
         release()
         await stopping
         expect(queue.isRunning()).toBe(false)
@@ -78,7 +78,7 @@ describe('gracefulStop', () => {
         })
         const target = Object.assign(queue, { flush })
         queue.enqueue('x')
-        await gracefulStop(target)
+        await gracefulStop(target, { timeoutMs: 5_000 })
         expect(flush).not.toHaveBeenCalled()
     })
 
@@ -90,7 +90,7 @@ describe('gracefulStop', () => {
         const target = Object.assign(queue, { flush })
 
         queue.enqueue('pending')
-        await gracefulStop(target, { flush: true })
+        await gracefulStop(target, { flush: true, timeoutMs: 5_000 })
         expect(flush).toHaveBeenCalledOnce()
         expect(queue.isRunning()).toBe(false)
         expect(queue.size()).toBe(1)
@@ -99,7 +99,7 @@ describe('gracefulStop', () => {
     it('flush: true is a no-op when queue has no flush', async () => {
         const queue = withWorker(buildQueue<number>(), async (n) => n)
         await expect(
-            gracefulStop(queue, { flush: true }),
+            gracefulStop(queue, { flush: true, timeoutMs: 5_000 }),
         ).resolves.toBeUndefined()
     })
 
@@ -142,7 +142,10 @@ describe('gracefulStop', () => {
         await Promise.resolve()
         expect(queue.activeCount()).toBe(2)
 
-        const stopping = gracefulStop(target, { flush: true })
+        const stopping = gracefulStop(target, {
+            flush: true,
+            timeoutMs: 5_000,
+        })
         release()
         await stopping
         expect(flush).toHaveBeenCalledOnce()
@@ -160,7 +163,7 @@ describe('gracefulStop', () => {
         queue.enqueue(1)
         await Promise.resolve()
 
-        const stopping = gracefulStop(queue)
+        const stopping = gracefulStop(queue, { timeoutMs: 5_000 })
         release()
         await stopping
         expect(queue.isProcessing()).toBe(false)
@@ -176,9 +179,9 @@ describe('gracefulStop', () => {
                 throw new Error('flush failed')
             },
         })
-        await expect(gracefulStop(target, { flush: true })).rejects.toThrow(
-            'flush failed',
-        )
+        await expect(
+            gracefulStop(target, { flush: true, timeoutMs: 5_000 }),
+        ).rejects.toThrow('flush failed')
     })
 
     it('throws InvalidWorkerOptionError for invalid timeoutMs', () => {

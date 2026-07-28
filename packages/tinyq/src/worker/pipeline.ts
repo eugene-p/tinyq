@@ -72,7 +72,7 @@ const normalizeStep = (step: PipelineStep, index: number): NormalizedStep => {
 }
 
 /** Brand for {@link pipelineDone} results — not part of the public result value. */
-const PIPELINE_DONE = Symbol('qkitt.pipelineDone')
+const PIPELINE_DONE = Symbol('tq.pipelineDone')
 
 /**
  * Marker returned from a step to finish the pipeline successfully without

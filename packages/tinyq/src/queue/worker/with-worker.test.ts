@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { buildQueue } from '../core/queue'
+import { whenIdle } from './when-idle'
 import { InvalidWorkerOptionError, withWorker } from './with-worker'
 
 const flush = async (times = 1) => {
@@ -8,15 +9,13 @@ const flush = async (times = 1) => {
     }
 }
 
-const waitForIdle = (queue: {
-    on: (event: 'worker:idle', cb: () => void) => () => void
-}) =>
-    new Promise<void>((resolve) => {
-        const off = queue.on('worker:idle', () => {
-            off()
-            resolve()
-        })
-    })
+/** Fail stuck drains instead of hanging the suite. */
+const IDLE_TIMEOUT_MS = 5_000
+
+const waitForIdle = (
+    queue: Parameters<typeof whenIdle>[0],
+    timeoutMs = IDLE_TIMEOUT_MS,
+) => whenIdle(queue, { timeoutMs })
 
 describe('withWorker', () => {
     it('processes items in FIFO order', async () => {
@@ -26,11 +25,10 @@ describe('withWorker', () => {
             return item * 2
         })
 
-        const idle = waitForIdle(queue)
         queue.enqueue(1)
         queue.enqueue(2)
         queue.enqueue(3)
-        await idle
+        await waitForIdle(queue)
 
         expect(order).toEqual([1, 2, 3])
         expect(queue.isEmpty()).toBe(true)
@@ -48,9 +46,8 @@ describe('withWorker', () => {
         queue.on('worker:completed', completed)
         queue.on('worker:idle', idle)
 
-        const idlePromise = waitForIdle(queue)
         queue.enqueue('a')
-        await idlePromise
+        await waitForIdle(queue)
 
         expect(started).toHaveBeenCalledWith({ item: 'a' })
         expect(completed).toHaveBeenCalledWith({ item: 'a', result: 'A' })
@@ -66,9 +63,8 @@ describe('withWorker', () => {
         const failed = vi.fn()
         queue.on('worker:failed', failed)
 
-        const idle = waitForIdle(queue)
         queue.enqueue(1)
-        await idle
+        await waitForIdle(queue)
 
         expect(failed).toHaveBeenCalledWith({ item: 1, error })
         expect(queue.isEmpty()).toBe(true)
@@ -85,15 +81,14 @@ describe('withWorker', () => {
         expect(queue.size()).toBe(1)
         expect(queue.isRunning()).toBe(false)
 
-        const idle = waitForIdle(queue)
         queue.start()
         expect(queue.isRunning()).toBe(true)
-        await idle
+        await waitForIdle(queue)
 
         expect(worker).toHaveBeenCalledWith(1)
     })
 
-    it('autoStart false has no queue:enqueued listener until start()', () => {
+    it('autoStart false does not process until start() (direct pump, no enqueued listener)', () => {
         const bare = buildQueue<number>()
         const onSpy = vi.spyOn(bare, 'on')
         const worker = vi.fn(async (item: number) => item)
@@ -102,44 +97,28 @@ describe('withWorker', () => {
         const enqueuedCalls = () =>
             onSpy.mock.calls.filter(([eventName]) => eventName === 'queue:enqueued')
 
+        // Worker pumps via overridden enqueue — never subscribes to queue:enqueued.
         expect(enqueuedCalls()).toHaveLength(0)
-
         queue.start()
-        expect(enqueuedCalls()).toHaveLength(1)
-
-        // Repeated start does not double-subscribe.
+        expect(enqueuedCalls()).toHaveLength(0)
         queue.start()
-        expect(enqueuedCalls()).toHaveLength(1)
+        expect(enqueuedCalls()).toHaveLength(0)
     })
 
-    it('stop unsubscribes; later start restores processing', async () => {
-        const bare = buildQueue<number>()
-        const enqueuedUnsubs: Array<ReturnType<typeof vi.fn>> = []
-        const originalOn = bare.on.bind(bare)
-        bare.on = ((eventName, callback) => {
-            const unsub = originalOn(eventName, callback)
-            if (eventName === 'queue:enqueued') {
-                const tracked = vi.fn(unsub)
-                enqueuedUnsubs.push(tracked)
-                return tracked
-            }
-            return unsub
-        }) as typeof bare.on
-
+    it('stop pauses pumping; later start restores processing', async () => {
         const worker = vi.fn(async (item: number) => item)
-        const queue = withWorker(bare, worker, { autoStart: false })
+        const queue = withWorker(buildQueue<number>(), worker, {
+            autoStart: false,
+        })
 
         queue.start()
-        expect(enqueuedUnsubs).toHaveLength(1)
 
-        const idle1 = waitForIdle(queue)
         queue.enqueue(1)
-        await idle1
+        await waitForIdle(queue)
         expect(worker).toHaveBeenCalledWith(1)
 
         queue.stop()
         expect(queue.isRunning()).toBe(false)
-        expect(enqueuedUnsubs[0]).toHaveBeenCalledOnce()
 
         worker.mockClear()
         queue.enqueue(2)
@@ -147,10 +126,8 @@ describe('withWorker', () => {
         expect(worker).not.toHaveBeenCalled()
         expect(queue.size()).toBe(1)
 
-        const idle2 = waitForIdle(queue)
         queue.start()
-        expect(enqueuedUnsubs).toHaveLength(2)
-        await idle2
+        await waitForIdle(queue)
         expect(worker).toHaveBeenCalledWith(2)
         expect(queue.isEmpty()).toBe(true)
     })
@@ -232,9 +209,8 @@ describe('withWorker', () => {
         const enqueued = vi.fn()
         queue.on('queue:enqueued', enqueued)
 
-        const idle = waitForIdle(queue)
         queue.enqueue(42)
-        await idle
+        await waitForIdle(queue)
 
         expect(enqueued).toHaveBeenCalledWith({ item: 42, size: 1 })
         // dequeued by the worker
@@ -271,14 +247,14 @@ describe('withWorker', () => {
 
     it('emits worker:pump-error and stops on unexpected dequeue failures', async () => {
         const queue = buildQueue<number>()
-        const originalTryDequeue = queue.tryDequeue.bind(queue)
+        const originalDequeue = queue.dequeue.bind(queue)
         let failNext = false
         const boom = new Error('custom dequeue failure')
-        queue.tryDequeue = () => {
+        queue.dequeue = () => {
             if (failNext) {
                 throw boom
             }
-            return originalTryDequeue()
+            return originalDequeue()
         }
 
         let release!: () => void
@@ -317,9 +293,8 @@ describe('withWorker', () => {
         expect(workerQueue.size()).toBe(2)
 
         // Explicit start recovers after the failure is fixed.
-        const idle = waitForIdle(workerQueue)
         workerQueue.start()
-        await idle
+        await waitForIdle(workerQueue)
         expect(workerQueue.isEmpty()).toBe(true)
     })
 
@@ -333,11 +308,10 @@ describe('withWorker', () => {
             },
         )
 
-        const idle = waitForIdle(queue)
         queue.enqueue(undefined)
         queue.enqueue(null)
         queue.enqueue('done')
-        await idle
+        await waitForIdle(queue)
 
         expect(seen).toEqual([undefined, null, 'done'])
         expect(queue.isEmpty()).toBe(true)
@@ -353,10 +327,9 @@ describe('withWorker', () => {
         const completed = vi.fn()
         queue.on('worker:completed', completed)
 
-        const idle = waitForIdle(queue)
         queue.enqueue(1)
         queue.enqueue(2)
-        await idle
+        await waitForIdle(queue)
 
         expect(order).toEqual([1, 2])
         expect(completed).toHaveBeenNthCalledWith(1, { item: 1, result: 2 })
@@ -371,9 +344,8 @@ describe('withWorker', () => {
             return item
         })
 
-        const idle = waitForIdle(queue)
         for (let i = 0; i < n; i += 1) queue.enqueue(i)
-        await idle
+        await waitForIdle(queue)
 
         expect(count).toBe(n)
         expect(queue.isEmpty()).toBe(true)
@@ -388,9 +360,8 @@ describe('withWorker', () => {
         const failed = vi.fn()
         queue.on('worker:failed', failed)
 
-        const idle = waitForIdle(queue)
         queue.enqueue(1)
-        await idle
+        await waitForIdle(queue)
 
         expect(failed).toHaveBeenCalledWith({ item: 1, error })
     })

@@ -1,11 +1,11 @@
 /**
- * Forward worker failures to a distinct dead-letter queue.
- * Layers: buildQueue → withWorker → withDeadLetter (alias: withDlq)
+ * Park worker failures on a sink queue; drain the sink on your schedule.
+ * Layers: buildQueue → withWorker → withDlq
  */
 import {
   buildQueue,
   getQueueName,
-  withDeadLetter,
+  withDlq,
   withWorker,
 } from '@qkitt/tinyq'
 import { line, phase, summary, title, waitIdle } from '../_log'
@@ -42,7 +42,7 @@ async function main() {
 
   const dlq = buildQueue<DeadLetterJob>({ name: 'orders-dlq' })
 
-  const queue = withDeadLetter(source, dlq, {
+  const queue = withDlq(source, dlq, {
     map: (item, error) => ({
       id: item.id,
       payload: item.payload,

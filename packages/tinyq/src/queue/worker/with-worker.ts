@@ -31,7 +31,7 @@ export type WorkerEvents<T, R = unknown> = {
     /** Fired when nothing is in-flight and the queue is empty. */
     'worker:idle': undefined
     /**
-     * Fired when `tryDequeue` throws an unexpected error.
+     * Fired when dequeue throws an unexpected error.
      * The worker stops taking new items; call `start()` after fixing the cause.
      */
     'worker:pump-error': { error: unknown }
@@ -89,7 +89,11 @@ const isThenable = (value: unknown): value is PromiseLike<unknown> =>
 
 /**
  * Wrap a queue with a worker that dequeues and processes items FIFO-style.
- * Listens for `queue:enqueued` and pumps work up to `concurrency`.
+ *
+ * The worker **overrides `enqueue` / `replaceAll`** to pump directly instead of
+ * subscribing to `queue:enqueued`. That keeps the hot path free of event
+ * payload allocation when only the worker is driving drain. Call methods on the
+ * returned queue (not a retained bare inner reference) so pumping stays wired.
  *
  * Failed items are **not** re-queued. Use `retryWorker` for in-call retries,
  * `withDeadLetter` / `withDlq` for a separate sink, `withLoop` to re-enter the
@@ -98,8 +102,8 @@ const isThenable = (value: unknown): value is PromiseLike<unknown> =>
  * Inner decorator extras are preserved at runtime and in the return type.
  *
  * Dequeue failures emit `worker:pump-error` and stop the worker. Nullish
- * payloads are valid — the pump uses {@link Queue.tryDequeue} so emptiness is
- * structural, not value-based.
+ * payloads are valid — the pump uses `isEmpty` + `dequeue` so emptiness is
+ * structural, not value-based (no per-item {@link import('../core/queue').QueueSlot} allocation).
  */
 export const withWorker = <
     T,
@@ -116,6 +120,10 @@ export const withWorker = <
     const autoStart = options.autoStart ?? true
 
     const inner = queue
+    const baseEnqueue = inner.enqueue
+    const baseReplaceAll = inner.replaceAll
+    const baseIsEmpty = inner.isEmpty
+    const baseDequeue = inner.dequeue
     const emitInner = inner.emit as (
         eventName: string,
         data: unknown,
@@ -145,7 +153,7 @@ export const withWorker = <
     const finishItem = (): void => {
         active -= 1
 
-        if (active === 0 && inner.isEmpty() && subs.idle > 0) {
+        if (active === 0 && baseIsEmpty() && subs.idle > 0) {
             emitInner('worker:idle', undefined)
         }
 
@@ -173,24 +181,31 @@ export const withWorker = <
         }
 
         if (isThenable(ret)) {
-            // One thenable hop — no outer `async` function Promise.
-            Promise.resolve(ret).then(
-                (result) => {
-                    if (subs.completed > 0) {
-                        emitInner('worker:completed', {
-                            item,
-                            result: result as R,
-                        })
-                    }
-                    finishItem()
-                },
-                (error: unknown) => {
-                    if (subs.failed > 0) {
-                        emitInner('worker:failed', { item, error })
-                    }
-                    finishItem()
-                },
-            )
+            // Direct thenable hop — no `Promise.resolve` wrapper allocation.
+            try {
+                ret.then(
+                    (result) => {
+                        if (subs.completed > 0) {
+                            emitInner('worker:completed', {
+                                item,
+                                result: result as R,
+                            })
+                        }
+                        finishItem()
+                    },
+                    (error: unknown) => {
+                        if (subs.failed > 0) {
+                            emitInner('worker:failed', { item, error })
+                        }
+                        finishItem()
+                    },
+                )
+            } catch (error) {
+                if (subs.failed > 0) {
+                    emitInner('worker:failed', { item, error })
+                }
+                finishItem()
+            }
             return
         }
 
@@ -200,19 +215,8 @@ export const withWorker = <
         finishItem()
     }
 
-    let unsubscribeEnqueued: (() => void) | undefined
-
-    const subscribeEnqueued = (): void => {
-        if (unsubscribeEnqueued) return
-        unsubscribeEnqueued = onInner('queue:enqueued', () => {
-            pump()
-        })
-    }
-
     const stop = (): void => {
         running = false
-        unsubscribeEnqueued?.()
-        unsubscribeEnqueued = undefined
     }
 
     const pump = (): void => {
@@ -220,12 +224,11 @@ export const withWorker = <
         pumping = true
         try {
             while (running && active < concurrency) {
-                // Slot presence = non-empty; payload may be null/undefined.
-                const slot = inner.tryDequeue()
-                if (slot === undefined) break
-
+                // isEmpty + dequeue: no QueueSlot alloc; nullish payloads remain valid.
+                if (baseIsEmpty()) break
+                const item = baseDequeue() as T
                 active += 1
-                processItem(slot.value)
+                processItem(item)
             }
         } catch (error) {
             // Unexpected dequeue failure: surface and stop so it is not silent.
@@ -241,8 +244,18 @@ export const withWorker = <
     const start = (): void => {
         if (running) return
         running = true
-        // Subscribe here so autoStart: false has no listener until start().
-        subscribeEnqueued()
+        pump()
+    }
+
+    /** Enqueue then pump — no `queue:enqueued` subscription on the hot path. */
+    const enqueue = (item: T): void => {
+        baseEnqueue(item)
+        pump()
+    }
+
+    /** Bulk load then pump so preloaded work starts without a separate start race. */
+    const replaceAll = (items: readonly T[]): void => {
+        baseReplaceAll(items)
         pump()
     }
 
@@ -276,6 +289,8 @@ export const withWorker = <
     const api = markQueueLayer(
         decorateQueue(inner, {
             on,
+            enqueue,
+            replaceAll,
             start,
             stop,
             gracefulStop,

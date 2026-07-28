@@ -22,7 +22,7 @@ import { getQueueName } from '../core/queue-name.util'
 import type { QueueWithWorker, WorkerEvents } from '../worker/with-worker'
 import {
     getLoopHops,
-    QKITT_QUEUE_KEY,
+    TQ_KEY,
     queueMetaEqual,
     readMappedQueueMeta,
     stampLoopHops,
@@ -40,8 +40,8 @@ export type LoopMapContext = {
 export type WithLoopOptions<T, U = T> = {
     /**
      * Remap the **original** failed item before re-enqueue.
-     * Receives hop context; library always re-stamps {@link QKITT_QUEUE_KEY}.
-     * If the result changes `__qkittQueue` vs the original, emits
+     * Receives hop context; library always re-stamps {@link TQ_KEY}.
+     * If the result changes `__tq` vs the original, emits
      * `loop:meta-override` and overwrites with the library stamp.
      */
     map?: (item: T, error: unknown, ctx: LoopMapContext) => U
@@ -64,7 +64,7 @@ export type LoopEvents<T, U = T> = {
     /** Fired after a successful re-enqueue onto the same queue. */
     'loop:enqueued': { item: T; error: unknown; loopItem: U }
     /**
-     * Fired when user `map` changed `__qkittQueue` vs the original.
+     * Fired when user `map` changed `__tq` vs the original.
      * Library still re-stamps and re-enqueues.
      */
     'loop:meta-override': {
@@ -134,10 +134,13 @@ const requireLoopDelayMs = (
 /**
  * On `worker:failed`, re-enqueue onto the **same** worker queue (failure loop).
  *
+ * Fair retries: the concurrency slot is released between hops. Prefer
+ * {@link import('../../worker/retry').retryWorker} for short in-call retries.
+ *
  * Requires a named queue: `buildQueue({ name: 'jobs' })`. Hop meta lives under
- * `item.__qkittQueue.loop[name].hops` (see {@link getLoopHops}).
+ * `item.__tq.loop[name].hops` (see {@link getLoopHops}).
  * Optional `map` runs on the **original** item with hop context; the library
- * always re-stamps `__qkittQueue`. If map changes that bag, emits
+ * always re-stamps `__tq`. If map changes that bag, emits
  * `loop:meta-override` and overwrites.
  *
  * Optional `delay` (static ms or `(hops) => ms`) waits before re-enqueue.
@@ -148,10 +151,10 @@ const requireLoopDelayMs = (
  * closure), not in the queue. Restart, crash, or process exit loses them with no
  * recovery. Long delays increase that window of risk.
  *
- * Non-plain payloads become `{ value, __qkittQueue: { loop: { [name]: { hops } } } }`.
+ * Non-plain payloads become `{ value, __tq: { loop: { [name]: { hops } } } }`.
  *
- * **Not a dead letter.** For a separate sink use
- * {@link import('../dlq/with-dead-letter').withDeadLetter}.
+ * **Not a failure sink.** To park failed items for later drain, use
+ * {@link import('../dlq/with-dead-letter').withDlq}.
  *
  * **Composition:** `withLoop(withWorker(buildQueue({ name: 'jobs' }), run))`.
  *
@@ -286,10 +289,10 @@ export const withLoop = <
 
 const isPlainQueueMeta = (item: unknown): unknown => {
     if (item === null || typeof item !== 'object') return undefined
-    if (!Object.prototype.hasOwnProperty.call(item, QKITT_QUEUE_KEY)) {
+    if (!Object.prototype.hasOwnProperty.call(item, TQ_KEY)) {
         return undefined
     }
-    return (item as Record<string, unknown>)[QKITT_QUEUE_KEY]
+    return (item as Record<string, unknown>)[TQ_KEY]
 }
 
-export { getLoopHops, QKITT_QUEUE_KEY }
+export { getLoopHops, TQ_KEY }

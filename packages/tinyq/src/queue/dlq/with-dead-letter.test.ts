@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { InvalidQueueCompositionError } from '../core/composition-error'
 import { buildQueue, QueueFullError } from '../core/queue'
+import { whenIdle } from '../worker/when-idle'
 import { withWorker } from '../worker/with-worker'
 import {
     DeadLetterEnqueueError,
@@ -9,15 +10,13 @@ import {
     withDlq,
 } from './with-dead-letter'
 
-const waitForIdle = (queue: {
-    on: (event: 'worker:idle', cb: () => void) => () => void
-}) =>
-    new Promise<void>((resolve) => {
-        const off = queue.on('worker:idle', () => {
-            off()
-            resolve()
-        })
-    })
+/** Fail stuck drains instead of hanging the suite. */
+const IDLE_TIMEOUT_MS = 5_000
+
+const waitForIdle = (
+    queue: Parameters<typeof whenIdle>[0],
+    timeoutMs = IDLE_TIMEOUT_MS,
+) => whenIdle(queue, { timeoutMs })
 
 describe('withDeadLetter', () => {
     it('is the same function as withDlq', () => {
@@ -37,9 +36,8 @@ describe('withDeadLetter', () => {
         const enqueued = vi.fn()
         queue.on('dlq:enqueued', enqueued)
 
-        const idle = waitForIdle(queue)
         queue.enqueue(42)
-        await idle
+        await waitForIdle(queue)
 
         expect(dlq.toArray()).toEqual([42])
         expect(enqueued).toHaveBeenCalledWith({
@@ -65,9 +63,8 @@ describe('withDeadLetter', () => {
             },
         )
 
-        const idle = waitForIdle(queue)
         queue.enqueue(7)
-        await idle
+        await waitForIdle(queue)
 
         expect(dlq.toArray()).toEqual([{ item: 7, reason: 'boom' }])
     })
@@ -82,9 +79,8 @@ describe('withDeadLetter', () => {
             { filter: (item) => item > 10 },
         )
 
-        const idle = waitForIdle(queue)
         queue.enqueue(3)
-        await idle
+        await waitForIdle(queue)
 
         expect(dlq.isEmpty()).toBe(true)
     })
@@ -108,9 +104,8 @@ describe('withDeadLetter', () => {
         const onError = vi.fn()
         queue.on('dlq:error', onError)
 
-        const idle = waitForIdle(queue)
         queue.enqueue(1)
-        await idle
+        await waitForIdle(queue)
 
         expect(dlq.isEmpty()).toBe(true)
         const cause = onError.mock.calls[0]?.[0].cause as DeadLetterEnqueueError
@@ -153,9 +148,8 @@ describe('withDeadLetter', () => {
         const onError = vi.fn()
         queue.on('dlq:error', onError)
 
-        const idle = waitForIdle(queue)
         queue.enqueue(1)
-        await idle
+        await waitForIdle(queue)
 
         expect(onError).toHaveBeenCalledOnce()
         const payload = onError.mock.calls[0]?.[0] as {
@@ -189,9 +183,8 @@ describe('withDeadLetter', () => {
         const onError = vi.fn()
         queue.on('dlq:error', onError)
 
-        const idle = waitForIdle(queue)
         queue.enqueue(1)
-        await idle
+        await waitForIdle(queue)
 
         expect(dlq.isEmpty()).toBe(true)
         const cause = onError.mock.calls[0]?.[0].cause as DeadLetterEnqueueError
@@ -212,9 +205,8 @@ describe('withDeadLetter', () => {
         const failed = vi.fn()
         queue.on('worker:failed', failed)
 
-        const idle = waitForIdle(queue)
         queue.enqueue(1)
-        await idle
+        await waitForIdle(queue)
 
         expect(failed).toHaveBeenCalledWith({ item: 1, error })
         expect(dlq.toArray()).toEqual([1])
@@ -244,9 +236,8 @@ describe('withDeadLetter', () => {
             dlq,
         )
 
-        const idle = waitForIdle(queue)
         queue.enqueue(5)
-        await idle
+        await waitForIdle(queue)
 
         expect(dlq.toArray()).toEqual([5])
     })

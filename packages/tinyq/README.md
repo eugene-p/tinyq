@@ -72,18 +72,18 @@ const run = retryWorker(
 const queue = withWorker(buildQueue<Job>(), run, { concurrency: 4 })
 ```
 
-Failed items are **not** re-queued. Use `retryWorker` for in-call retries, `withLoop` for same-queue re-entry, or `withDeadLetter` / `withDlq` for a separate sink.
+Failed items are **not** re-queued. Use `retryWorker` for in-call retries, `withLoop` for fair same-queue re-entry (hop meta on `__tq`), or `withDlq` to park failures on a sink queue you drain on your schedule.
 
 ## Recipes
 
 | Task | How |
 | --- | --- |
 | Concurrent jobs | `withWorker(buildQueue(), run, { concurrency })` |
-| Drain / graceful stop | `whenIdle(queue)` · `gracefulStop(queue)` |
+| Drain / graceful stop | `whenIdle(queue, { timeoutMs })` · `gracefulStop(queue, { timeoutMs })` |
 | Retries / multi-step | `retryWorker` · `pipelineWorker` → pass to `withWorker` |
 | Same-queue re-entry | `withLoop(withWorker(...), { filter, delay })` |
-| Dead-letter sink | `withDeadLetter` / `withDlq` after the worker |
-| Hop, then dead-letter | `withLoop` then `withDlq` with complementary filters |
+| Failure sink (pull later) | `withDlq(withWorker(...), failedQueue)` |
+| Hop, then sink | `withLoop` then `withDlq` with complementary filters |
 
 Runnable scenarios: [examples/](https://github.com/eugene-p/qkitt-queue/tree/main/examples) in the monorepo.
 
@@ -97,21 +97,21 @@ In-process peers only. Full tables and setup: [root README](https://github.com/e
 
 | Library | c=1 | c=4 | heap Δ (c=1) |
 | --- | ---: | ---: | ---: |
-| **@qkitt/tinyq** `withWorker` | **846** | **874** | **247 KiB** |
-| fastq | 107 | 100 | 6.80 MiB |
-| async.queue | 195 | 220 | 4.94 MiB |
-| p-queue | 82 | 71 | 11.04 MiB |
+| **@qkitt/tinyq** `withWorker` | **1,264** | **1,189** | **~250 KiB** |
+| fastq | 299 | 189 | 6.73 MiB |
+| async.queue | 358 | 383 | 4.97 MiB |
+| p-queue | 99 | 92 | 11.21 MiB |
 
 **Bare queue** — 50 000 enqueue + dequeue (ops/s median · retained heap)
 
 | Library | ops/s | heap Δ |
 | --- | ---: | ---: |
-| **@qkitt/tinyq** `buildQueue` | 789 | 1.19 MiB |
-| denque | 1,462 | 1.73 MiB |
-| yocto-queue | 2,161 | 1.92 MiB |
-| native `Array` push/shift | 7 | 1.18 MiB |
+| **@qkitt/tinyq** `buildQueue` | 1,606 | 1.19 MiB |
+| denque | 2,139 | 1.47 MiB |
+| yocto-queue | 2,197 | 1.92 MiB |
+| native `Array` push/shift | 8 | 1.19 MiB |
 
-Relative numbers (Node 22.23.1, Windows laptop, 2026-07-22). YMMV.
+Relative numbers (Node 26.5.0, Windows laptop, 2026-07-28). YMMV.
 
 ## License
 

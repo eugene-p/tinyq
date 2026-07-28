@@ -42,6 +42,11 @@ const runFlush = async (queue: GracefulStopable): Promise<void> => {
  *
  * Unlike {@link import('./when-idle').whenIdle}, this does **not** require an
  * empty queue — remaining items stay queued (typical SIGTERM path).
+ *
+ * **Without `timeoutMs` the promise can hang forever** if in-flight work or an
+ * opt-in `flush()` never settles. Prefer a budget so callers fail closed with
+ * {@link LifecycleTimeoutError} (in-flight work is not cancelled — only the
+ * waiter rejects).
  */
 export const gracefulStop = (
     queue: GracefulStopable,

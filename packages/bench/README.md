@@ -2,7 +2,7 @@
 
 Benchmarks for [`@qkitt/tinyq`](../queue).
 
-Compares in-process bare-queue and worker-drain performance against similar libraries. Runs locally and in CI from the monorepo root. Published summary numbers live in the [root README](../../README.md#benchmarks) and the [queue package README](../queue/README.md#benchmark-summary) — re-run from here after changing the core.
+Compares in-process bare-queue and worker-drain performance against similar libraries. Runs locally and in CI from the monorepo root. Published summary numbers live in the [root README](../../README.md#benchmarks) and the [package README](../tinyq/README.md#benchmark-summary) — re-run from here after changing the core.
 
 ## Peers
 

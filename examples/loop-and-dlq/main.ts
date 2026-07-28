@@ -3,8 +3,8 @@
  * Layers: buildQueue({ name }) → withWorker → withLoop → withDlq
  *
  * Both layers listen to worker:failed independently. Without filters,
- * every failure would re-enter and dead-letter (duplicates in the sink).
- * Complementary filters: loop while hops < MAX, dlq when hops >= MAX.
+ * every failure would re-enter and land in the sink (duplicates).
+ * Complementary filters: loop while hops < MAX, sink when hops >= MAX.
  */
 import {
   buildQueue,

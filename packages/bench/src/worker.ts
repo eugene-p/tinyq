@@ -21,6 +21,9 @@ const syncNoop = (): void => {}
  * the worker matches that model and proves every enqueued job was processed
  * even if the idle event were wrong or late.
  */
+/** Safety budget so a stuck drain fails the bench instead of hanging forever. */
+const DRAIN_TIMEOUT_MS = 60_000
+
 const drainQkitt = (n: number, concurrency: number): Promise<void> =>
   new Promise((resolve, reject) => {
     if (n === 0) {
@@ -30,10 +33,18 @@ const drainQkitt = (n: number, concurrency: number): Promise<void> =>
 
     let finished = 0
     let settled = false
+    const timer = setTimeout(() => {
+      finish(
+        new Error(
+          `tinyq worker drain timed out after ${DRAIN_TIMEOUT_MS}ms (n=${n}, c=${concurrency}, finished=${finished})`,
+        ),
+      )
+    }, DRAIN_TIMEOUT_MS)
 
     const finish = (error?: unknown): void => {
       if (settled) return
       settled = true
+      clearTimeout(timer)
       q.stop()
       if (error !== undefined) reject(error)
       else resolve()

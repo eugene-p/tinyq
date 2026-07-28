@@ -49,7 +49,7 @@ export {
     getLoopHops,
     InvalidLoopOptionError,
     LoopEnqueueError,
-    QKITT_QUEUE_KEY,
+    TQ_KEY,
     withLoop,
     type LoopEvents,
     type LoopMapContext,

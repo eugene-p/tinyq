@@ -11,7 +11,9 @@ afterEach(() => {
 describe('whenIdle', () => {
     it('resolves immediately when already idle', async () => {
         const queue = withWorker(buildQueue<number>(), async (n) => n)
-        await expect(whenIdle(queue)).resolves.toBeUndefined()
+        await expect(
+            whenIdle(queue, { timeoutMs: 5_000 }),
+        ).resolves.toBeUndefined()
     })
 
     it('resolves after work drains', async () => {
@@ -29,7 +31,7 @@ describe('whenIdle', () => {
         await Promise.resolve()
         expect(queue.isProcessing()).toBe(true)
 
-        const idle = whenIdle(queue)
+        const idle = whenIdle(queue, { timeoutMs: 5_000 })
         let done = false
         void idle.then(() => {
             done = true
@@ -57,9 +59,9 @@ describe('whenIdle', () => {
             { concurrency: 2 },
         )
 
-        const idle = whenIdle(queue)
         queue.enqueue(1)
         queue.enqueue(2)
+        const idle = whenIdle(queue, { timeoutMs: 5_000 })
         release()
         await idle
         expect(queue.isEmpty()).toBe(true)

@@ -3,7 +3,7 @@
  * Survives `decorateQueue` via the prototype chain (same pattern as maxSize).
  */
 
-const QUEUE_NAME = Symbol.for('qkitt:queue-name')
+const QUEUE_NAME = Symbol.for('tq:queue-name')
 
 /** Stamp a non-empty logical name on a queue object (called by `buildQueue`). */
 export const markQueueName = <T extends object>(

@@ -32,7 +32,7 @@ Fast **in-memory** queue toolkit. Start bare, add a layer as requirements change
 - **Concurrent workers** — drain that backlog with a concurrency cap.
 - **Retries** — survive flaky third-party calls.
 - **Pipelines** — fixed stages per item (validate → charge → confirm).
-- **Failure routing** — re-enter the same queue with hop meta (`withLoop`) or forward failed items to a dead-letter sink (`withDeadLetter` / `withDlq`).
+- **Failure routing** — fair same-queue re-entry with hop meta (`withLoop`), or park failures on a sink queue you drain later (`withDlq`).
 
 **Out of scope:** work that spans machines or processes; durable / persisted queues; topic routers.
 
@@ -80,7 +80,7 @@ const run = retryWorker(
 const queue = withWorker(buildQueue<Job>(), run, { concurrency: 4 })
 ```
 
-Failed items are **not** re-queued. Use `retryWorker` for in-call retries, `withDeadLetter` / `withDlq` for a separate sink, or `withLoop` to re-enter the same queue with hop meta.
+Failed items are **not** re-queued. Use `retryWorker` for in-call retries, `withDlq` to park failures on a sink you consume on your schedule, or `withLoop` for fair same-queue re-entry (hop meta on `__tq`).
 
 ## Examples
 
@@ -90,8 +90,8 @@ Failed items are **not** re-queued. Use `retryWorker` for in-call retries, `with
 | [`lifecycle`](./examples/lifecycle/main.ts) | `whenIdle` drain vs `gracefulStop` |
 | [`retry-pipeline`](./examples/retry-pipeline/main.ts) | Retries / multi-step |
 | [`with-loop`](./examples/with-loop/main.ts) | Same-queue re-entry, hop cap, hop-based `delay` |
-| [`with-dlq`](./examples/with-dlq/main.ts) | Failed items → distinct sink |
-| [`loop-and-dlq`](./examples/loop-and-dlq/main.ts) | Hop, then dead-letter via filters |
+| [`with-dlq`](./examples/with-dlq/main.ts) | Failed items → sink queue (drain later) |
+| [`loop-and-dlq`](./examples/loop-and-dlq/main.ts) | Hop, then sink via complementary filters |
 
 ```bash
 npm run build
@@ -124,7 +124,7 @@ npm run bench
 
 Details and setup: [`packages/bench`](./packages/bench) · re-run: `npm run bench` · summary also in the [queue package README](./packages/tinyq/README.md#benchmark-summary).
 
-> AMD Ryzen 7 4800HS (8c/16t) · 16 GB · Windows 11 · Node 22.23.1 · `tinybench` via `tsx --expose-gc` · 2026-07-22 · YMMV
+> AMD Ryzen 7 4800HS (8c/16t) · 16 GB · Windows 11 · Node 26.5.0 · `tinybench` via `tsx --expose-gc` · 2026-07-28 · YMMV
 
 **Worker drain is the strength** — high ops/s and low retained memory under a backlog. Bare FIFO is competitive on heap and far faster than `Array#shift`; pure enqueue/dequeue ops trail dedicated structures like denque / yocto-queue.
 
@@ -132,19 +132,19 @@ Details and setup: [`packages/bench`](./packages/bench) · re-run: `npm run benc
 
 | Library | 1k c=1 | 1k c=4 | 10k c=1 | 10k c=4 | heap Δ (10k c=1) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| **@qkitt/tinyq** `withWorker` | **7,622** | **9,671** | **846** | **874** | **247 KiB** |
-| fastq | 3,998 | 4,223 | 107 | 100 | 6.80 MiB |
-| async.queue | 2,744 | 2,757 | 195 | 220 | 4.94 MiB |
-| p-queue | 1,063 | 1,286 | 82 | 71 | 11.04 MiB |
+| **@qkitt/tinyq** `withWorker` | **11,403** | **12,255** | **1,264** | **1,189** | **~250 KiB** |
+| fastq | 3,927 | 3,823 | 299 | 189 | 6.73 MiB |
+| async.queue | 3,683 | 3,831 | 358 | 383 | 4.97 MiB |
+| p-queue | 1,317 | 1,201 | 99 | 92 | 11.21 MiB |
 
 ### Bare queue — 50k enqueue + dequeue
 
 | Library | ops/s (med) | heap Δ |
 | --- | ---: | ---: |
-| **@qkitt/tinyq** `buildQueue` | 789 | 1.19 MiB |
-| denque | 1,462 | 1.73 MiB |
-| yocto-queue | 2,161 | 1.92 MiB |
-| native `Array` push/shift | 7 | 1.18 MiB |
+| **@qkitt/tinyq** `buildQueue` | 1,606 | 1.19 MiB |
+| denque | 2,139 | 1.47 MiB |
+| yocto-queue | 2,197 | 1.92 MiB |
+| native `Array` push/shift | 8 | 1.19 MiB |
 
 Median ops/s, higher is better. Heap Δ = retained memory measured with all items still held (worker paused).
 

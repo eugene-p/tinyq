@@ -78,10 +78,15 @@ export class DeadLetterEnqueueError extends Error {
 }
 
 /**
- * Forward `worker:failed` items to a **distinct** dead-letter destination via `enqueue`.
+ * Park `worker:failed` items on a **distinct** sink queue via `enqueue`.
+ *
+ * Use this when you want to **consume failures on your schedule** (pull / drain
+ * the sink with another worker, batch job, or later pass) instead of handling
+ * them only via real-time `worker:failed` listeners. In-memory only — not a
+ * durable dead-letter store.
  *
  * **Composition:** apply after the worker:
- * `withDeadLetter(withWorker(buildQueue(), run), dlq)`.
+ * `withDlq(withWorker(buildQueue(), run), failed)`.
  *
  * Destination must not be the same reference as `source`. For same-queue
  * re-entry with hop metadata, use {@link import('../loop/with-loop').withLoop}.
@@ -90,7 +95,7 @@ export class DeadLetterEnqueueError extends Error {
  * {@link DeadLetterEnqueueError} (does not rethrow). A full bounded sink is
  * misconfiguration — size or drain the destination and subscribe to `dlq:error`.
  *
- * Multiple `withDeadLetter` layers each subscribe and forward (multi-destination).
+ * Multiple layers each subscribe and forward (multi-destination).
  *
  * @throws {InvalidQueueCompositionError} if `source` has no worker layer
  * @throws {InvalidDeadLetterOptionError} if `source === deadLetter`

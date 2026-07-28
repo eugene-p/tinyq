@@ -1,5 +1,5 @@
-/** Reserved top-level key for library-owned queue bookkeeping on payloads. */
-export const QKITT_QUEUE_KEY = '__qkittQueue' as const
+/** Reserved top-level key for library-owned bookkeeping on payloads. */
+export const TQ_KEY = '__tq' as const
 
 /** True for plain objects (`{}` / Object.create(null)), not arrays, Date, class instances. */
 export const isPlainObject = (
@@ -12,14 +12,14 @@ export const isPlainObject = (
 
 /**
  * Read hop count for a logical queue key.
- * Shape: `item.__qkittQueue.loop[name].hops`.
+ * Shape: `item.__tq.loop[name].hops`.
  */
 export const getLoopHops = (
     item: unknown,
     name: string,
 ): number | undefined => {
     if (!isPlainObject(item)) return undefined
-    const root = item[QKITT_QUEUE_KEY]
+    const root = item[TQ_KEY]
     if (!isPlainObject(root)) return undefined
     const loop = root.loop
     if (!isPlainObject(loop)) return undefined
@@ -42,7 +42,7 @@ export const queueMetaEqual = (a: unknown, b: unknown): boolean => {
 }
 
 /**
- * Build library-owned `__qkittQueue` root with incremented hop for `name`,
+ * Build library-owned `__tq` root with incremented hop for `name`,
  * preserving sibling keys under the root and under `loop`.
  */
 export const buildLoopQueueMeta = (
@@ -51,8 +51,8 @@ export const buildLoopQueueMeta = (
     hops: number,
 ): Record<string, unknown> => {
     const prevRoot =
-        isPlainObject(original) && isPlainObject(original[QKITT_QUEUE_KEY])
-            ? (original[QKITT_QUEUE_KEY] as Record<string, unknown>)
+        isPlainObject(original) && isPlainObject(original[TQ_KEY])
+            ? (original[TQ_KEY] as Record<string, unknown>)
             : {}
     const prevLoop = isPlainObject(prevRoot.loop)
         ? (prevRoot.loop as Record<string, unknown>)
@@ -75,7 +75,7 @@ export const buildLoopQueueMeta = (
 
 /**
  * Apply library hop stamp onto a user (or identity) map result.
- * Always overwrites {@link QKITT_QUEUE_KEY} with {@link buildLoopQueueMeta}
+ * Always overwrites {@link TQ_KEY} with {@link buildLoopQueueMeta}
  * computed from the **original** failed item.
  */
 export const stampLoopHops = <T>(
@@ -89,21 +89,21 @@ export const stampLoopHops = <T>(
     if (!isPlainObject(mapped)) {
         return {
             value: mapped,
-            [QKITT_QUEUE_KEY]: libraryRoot,
+            [TQ_KEY]: libraryRoot,
         }
     }
 
     const next: Record<string, unknown> = { ...mapped }
-    delete next[QKITT_QUEUE_KEY]
-    next[QKITT_QUEUE_KEY] = libraryRoot
+    delete next[TQ_KEY]
+    next[TQ_KEY] = libraryRoot
     return next
 }
 
 /** Own-property reserved bag on a plain mapped result, if any. */
 export const readMappedQueueMeta = (mapped: unknown): unknown => {
     if (!isPlainObject(mapped)) return undefined
-    if (!Object.prototype.hasOwnProperty.call(mapped, QKITT_QUEUE_KEY)) {
+    if (!Object.prototype.hasOwnProperty.call(mapped, TQ_KEY)) {
         return undefined
     }
-    return mapped[QKITT_QUEUE_KEY]
+    return mapped[TQ_KEY]
 }

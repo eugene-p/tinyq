@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { InvalidQueueCompositionError } from '../core/composition-error'
 import { buildQueue } from '../core/queue'
+import { whenIdle } from '../worker/when-idle'
 import { withWorker } from '../worker/with-worker'
-import { QKITT_QUEUE_KEY } from './hop-meta.util'
+import { TQ_KEY } from './hop-meta.util'
 import {
     getLoopHops,
     InvalidLoopOptionError,
@@ -16,15 +17,13 @@ const flush = async (times = 1) => {
     }
 }
 
-const waitForIdle = (queue: {
-    on: (event: 'worker:idle', cb: () => void) => () => void
-}) =>
-    new Promise<void>((resolve) => {
-        const off = queue.on('worker:idle', () => {
-            off()
-            resolve()
-        })
-    })
+/** Fail stuck drains instead of hanging the suite. */
+const IDLE_TIMEOUT_MS = 5_000
+
+const waitForIdle = (
+    queue: Parameters<typeof whenIdle>[0],
+    timeoutMs = IDLE_TIMEOUT_MS,
+) => whenIdle(queue, { timeoutMs })
 
 const named = <T>(name: string) => buildQueue<T>({ name })
 
@@ -45,8 +44,8 @@ describe('withLoop', () => {
         expect(() => withLoop(q)).toThrow(InvalidLoopOptionError)
     })
 
-    it('increments __qkittQueue.loop[name].hops on each failure', async () => {
-        type Job = { id: string; __qkittQueue?: unknown }
+    it('increments __tq.loop[name].hops on each failure', async () => {
+        type Job = { id: string; __tq?: unknown }
         const run = vi.fn(async (job: Job) => {
             const hops = getLoopHops(job, 'jobs')
             if (hops === undefined || hops < 2) {
@@ -56,9 +55,8 @@ describe('withLoop', () => {
 
         const queue = withLoop(withWorker(named<Job>('jobs'), run))
 
-        const idle = waitForIdle(queue)
         queue.enqueue({ id: 'a' })
-        await idle
+        await waitForIdle(queue)
         await flush(6)
 
         expect(run.mock.calls.length).toBeGreaterThanOrEqual(3)
@@ -66,7 +64,7 @@ describe('withLoop', () => {
         expect(getLoopHops(last, 'jobs')).toBe(2)
         expect(last).toMatchObject({
             id: 'a',
-            [QKITT_QUEUE_KEY]: { loop: { jobs: { hops: 2 } } },
+            [TQ_KEY]: { loop: { jobs: { hops: 2 } } },
         })
         expect(queue.isEmpty()).toBe(true)
     })
@@ -75,7 +73,7 @@ describe('withLoop', () => {
         type Job = {
             id: string
             note?: string
-            __qkittQueue?: {
+            __tq?: {
                 loop?: Record<string, { hops?: number; note?: string }>
                 otherTag?: number
             }
@@ -91,22 +89,21 @@ describe('withLoop', () => {
             }),
         )
 
-        const idle = waitForIdle(queue)
         queue.enqueue({
             id: 'a',
             note: 'user',
-            [QKITT_QUEUE_KEY]: {
+            [TQ_KEY]: {
                 otherTag: 7,
                 loop: { jobs: { note: 'keep' }, billing: { hops: 3 } },
             },
         })
-        await idle
+        await waitForIdle(queue)
         await flush(4)
 
         expect(resolved).toEqual({
             id: 'a',
             note: 'user',
-            [QKITT_QUEUE_KEY]: {
+            [TQ_KEY]: {
                 otherTag: 7,
                 loop: {
                     jobs: { note: 'keep', hops: 1 },
@@ -116,7 +113,7 @@ describe('withLoop', () => {
         })
     })
 
-    it('wraps primitives with value + __qkittQueue', async () => {
+    it('wraps primitives with value + __tq', async () => {
         let saw: unknown
         const queue = withLoop(
             withWorker(named<unknown>('n'), async (item) => {
@@ -127,14 +124,13 @@ describe('withLoop', () => {
             }),
         )
 
-        const idle = waitForIdle(queue)
         queue.enqueue(9)
-        await idle
+        await waitForIdle(queue)
         await flush(4)
 
         expect(saw).toEqual({
             value: 9,
-            [QKITT_QUEUE_KEY]: { loop: { n: { hops: 1 } } },
+            [TQ_KEY]: { loop: { n: { hops: 1 } } },
         })
     })
 
@@ -150,14 +146,13 @@ describe('withLoop', () => {
             }),
         )
 
-        const idle = waitForIdle(queue)
         queue.enqueue(when)
-        await idle
+        await waitForIdle(queue)
         await flush(4)
 
         expect(saw).toEqual({
             value: when,
-            [QKITT_QUEUE_KEY]: { loop: { jobs: { hops: 1 } } },
+            [TQ_KEY]: { loop: { jobs: { hops: 1 } } },
         })
     })
 
@@ -172,9 +167,8 @@ describe('withLoop', () => {
             }),
         )
 
-        const idle = waitForIdle(queue)
         queue.enqueue({ id: 'a' })
-        await idle
+        await waitForIdle(queue)
         await flush(4)
 
         expect(getLoopHops(resolved, 'jobs')).toBe(1)
@@ -198,21 +192,20 @@ describe('withLoop', () => {
             },
         )
 
-        const idle = waitForIdle(queue)
         queue.enqueue({ id: 'a' })
-        await idle
+        await waitForIdle(queue)
         await flush(4)
 
         expect(received[1]).toEqual({
             id: 'a',
             reason: 'fail',
             hopsSeen: 1,
-            [QKITT_QUEUE_KEY]: { loop: { jobs: { hops: 1 } } },
+            [TQ_KEY]: { loop: { jobs: { hops: 1 } } },
         })
         expect(getLoopHops(received[1], 'jobs')).toBe(1)
     })
 
-    it('emits loop:meta-override when map changes __qkittQueue, then re-stamps', async () => {
+    it('emits loop:meta-override when map changes __tq, then re-stamps', async () => {
         const override = vi.fn()
         let saw: unknown
         const queue = withLoop(
@@ -225,15 +218,14 @@ describe('withLoop', () => {
             {
                 map: (item) => ({
                     ...item,
-                    [QKITT_QUEUE_KEY]: { loop: { jobs: { hops: 99 } } },
+                    [TQ_KEY]: { loop: { jobs: { hops: 99 } } },
                 }),
             },
         )
         queue.on('loop:meta-override', override)
 
-        const idle = waitForIdle(queue)
         queue.enqueue({ id: 'a' })
-        await idle
+        await waitForIdle(queue)
         await flush(4)
 
         expect(override).toHaveBeenCalledOnce()
@@ -259,9 +251,8 @@ describe('withLoop', () => {
         )
         queue.on('loop:meta-override', override)
 
-        const idle = waitForIdle(queue)
         queue.enqueue({ id: 'a' })
-        await idle
+        await waitForIdle(queue)
         await flush(4)
 
         expect(override).not.toHaveBeenCalled()
@@ -275,9 +266,8 @@ describe('withLoop', () => {
             filter: () => false,
         })
 
-        const idle = waitForIdle(queue)
         queue.enqueue(1)
-        await idle
+        await waitForIdle(queue)
         await flush(2)
 
         expect(run).toHaveBeenCalledOnce()
@@ -300,9 +290,8 @@ describe('withLoop', () => {
         const onError = vi.fn()
         queue.on('loop:error', onError)
 
-        const idle = waitForIdle(queue)
         queue.enqueue(1)
-        await idle
+        await waitForIdle(queue)
 
         const cause = onError.mock.calls[0]?.[0].cause as LoopEnqueueError
         expect(cause).toBeInstanceOf(LoopEnqueueError)
@@ -320,15 +309,14 @@ describe('withLoop', () => {
         )
         queue.on('loop:enqueued', enqueued)
 
-        const idle = waitForIdle(queue)
         queue.enqueue({ id: 'a' })
-        await idle
+        await waitForIdle(queue)
         await flush(4)
 
         expect(enqueued).toHaveBeenCalledOnce()
         expect(enqueued.mock.calls[0]?.[0].loopItem).toMatchObject({
             id: 'a',
-            [QKITT_QUEUE_KEY]: { loop: { jobs: { hops: 1 } } },
+            [TQ_KEY]: { loop: { jobs: { hops: 1 } } },
         })
     })
 
@@ -343,9 +331,8 @@ describe('withLoop', () => {
         )
         queue.on('worker:failed', failed)
 
-        const idle = waitForIdle(queue)
         queue.enqueue({ id: 'a' })
-        await idle
+        await waitForIdle(queue)
 
         expect(failed).toHaveBeenCalledWith({ item: { id: 'a' }, error })
     })
@@ -366,9 +353,8 @@ describe('withLoop', () => {
             },
         )
 
-        const idle = waitForIdle(queue)
         queue.enqueue({ id: 'a' })
-        await idle
+        await waitForIdle(queue)
         await flush(4)
 
         expect(sawName).toBe('orders')
@@ -474,9 +460,8 @@ describe('withLoop', () => {
         )
         queue.on('loop:enqueued', enqueued)
 
-        const idle = waitForIdle(queue)
         queue.enqueue({ id: 'a' })
-        await idle
+        await waitForIdle(queue)
         await flush(4)
 
         expect(enqueued).toHaveBeenCalledOnce()
@@ -494,9 +479,8 @@ describe('withLoop', () => {
         )
         queue.on('loop:error', onError)
 
-        const idle = waitForIdle(queue)
         queue.enqueue(1)
-        await idle
+        await waitForIdle(queue)
 
         const cause = onError.mock.calls[0]?.[0].cause as LoopEnqueueError
         expect(cause).toBeInstanceOf(LoopEnqueueError)
@@ -545,9 +529,8 @@ describe('withLoop', () => {
         )
         queue.on('loop:error', onError)
 
-        const idle = waitForIdle(queue)
         queue.enqueue(1)
-        await idle
+        await waitForIdle(queue)
 
         const cause = onError.mock.calls[0]?.[0].cause as LoopEnqueueError
         expect(cause).toBeInstanceOf(LoopEnqueueError)

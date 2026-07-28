@@ -28,6 +28,10 @@ export type WhenIdleOptions = {
  * Idle never fires if items remain and the pump is not running (`stop()`, or
  * `autoStart: false` without `start()`). Pass `timeoutMs`, start the worker,
  * or drain/clear first.
+ *
+ * **Without `timeoutMs` the promise can hang forever** (stuck worker, stopped
+ * pump with remaining items, or a never-finishing job). Prefer a budget in
+ * production and tests so callers fail closed with {@link LifecycleTimeoutError}.
  */
 export const whenIdle = (
     queue: IdleWaitable,

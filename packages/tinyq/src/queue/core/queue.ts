@@ -3,7 +3,6 @@ import {
     type EventEmitter,
     type EventMap,
 } from '../../events'
-import { createSubscriptionCounts } from '../../events/subscription-counts'
 import { isIntegerInRange } from '../../util/number.util'
 import { markQueueName } from './queue-name.util'
 
@@ -115,6 +114,28 @@ export class InvalidQueueOptionError extends Error {
     }
 }
 
+type QueueSubs = {
+    enqueued: number
+    dequeued: number
+    emptied: number
+    cleared: number
+}
+
+const EVENT_SLOT: Record<string, keyof QueueSubs> = {
+    'queue:enqueued': 'enqueued',
+    'queue:dequeued': 'dequeued',
+    'queue:emptied': 'emptied',
+    'queue:cleared': 'cleared',
+}
+
+/**
+ * In-memory FIFO queue.
+ *
+ * Two-stack storage (O(1) amortised enqueue/dequeue). Methods are closures so
+ * {@link import('./forward.util').decorateQueue} can prototype-delegate without
+ * rebinding `this`. The event emitter is created on the first {@link Queue.on}
+ * so bare produce/consume pays almost nothing beyond the arrays.
+ */
 export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
     const maxSize = options.maxSize
     if (maxSize !== undefined && !isIntegerInRange(maxSize, 1)) {
@@ -132,77 +153,92 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
         name = trimmed
     }
 
-    // Two-stack FIFO: O(1) amortized enqueue/dequeue without splice shifting.
-    // Maintained `count` avoids inbox.length + outbox.length on every op.
+    // Two-stack FIFO: O(1) amortised enqueue/dequeue without splice shifting.
     let inbox: T[] = []
     let outbox: T[] = []
     let count = 0
-    const emitter = buildEventEmitter<QueueEvents<T>>()
-    const { counts: subs, wrapOn } = createSubscriptionCounts({
-        enqueued: 'queue:enqueued',
-        dequeued: 'queue:dequeued',
-        emptied: 'queue:emptied',
-        cleared: 'queue:cleared',
-    })
-    const on = wrapOn(emitter.on)
+
+    // Lazy events: no emitter until the first subscriber.
+    let emitter: EventEmitter<QueueEvents<T>> | undefined
+    let subs: QueueSubs | undefined
+
+    const ensureEmitter = (): EventEmitter<QueueEvents<T>> => {
+        if (emitter !== undefined) return emitter
+        emitter = buildEventEmitter<QueueEvents<T>>()
+        subs = { enqueued: 0, dequeued: 0, emptied: 0, cleared: 0 }
+        return emitter
+    }
+
+    const on: EventEmitter<QueueEvents<T>>['on'] = (eventName, callback) => {
+        const em = ensureEmitter()
+        const unsub = em.on(eventName, callback)
+        const slot = EVENT_SLOT[eventName as string]
+        if (slot !== undefined && subs !== undefined) {
+            subs[slot] += 1
+            return () => {
+                unsub()
+                if (subs !== undefined) subs[slot] -= 1
+            }
+        }
+        return unsub
+    }
+
+    const emit: EventEmitter<QueueEvents<T>>['emit'] = (eventName, data) => {
+        emitter?.emit(eventName, data)
+    }
 
     const flipInboxToOutbox = (): void => {
-        // Reverse in place, then retarget: no intermediate copy of elements.
         outbox = inbox
         outbox.reverse()
         inbox = []
     }
 
-    const enqueue = (item: T): void => {
-        if (maxSize !== undefined && count >= maxSize) {
-            throw new QueueFullError(maxSize)
+    const emitAfterDequeue = (value: T): void => {
+        if (subs === undefined) return
+        if (subs.dequeued > 0) {
+            emitter!.emit('queue:dequeued', { item: value, size: count })
         }
-        inbox.push(item)
-        count += 1
-        if (subs.enqueued > 0) {
-            emitter.emit('queue:enqueued', { item, size: count })
+        if (count === 0 && subs.emptied > 0) {
+            emitter!.emit('queue:emptied', undefined)
         }
     }
 
-    // Nullish payloads are valid. Emptiness is “no slot”, not “value is undefined”:
-    // tryDequeue/tryPeek return `{ value }` when occupied, `undefined` when empty.
+    // Specialise maxSize so the unbounded hot path has no capacity branch.
+    const enqueue: (item: T) => void =
+        maxSize === undefined
+            ? (item: T): void => {
+                  inbox.push(item)
+                  count += 1
+                  if (subs !== undefined && subs.enqueued > 0) {
+                      emitter!.emit('queue:enqueued', { item, size: count })
+                  }
+              }
+            : (item: T): void => {
+                  if (count >= maxSize) {
+                      throw new QueueFullError(maxSize)
+                  }
+                  inbox.push(item)
+                  count += 1
+                  if (subs !== undefined && subs.enqueued > 0) {
+                      emitter!.emit('queue:enqueued', { item, size: count })
+                  }
+              }
+
     const tryDequeue = (): QueueSlot<T> | undefined => {
         if (count === 0) return undefined
-
-        if (outbox.length === 0) {
-            flipInboxToOutbox()
-        }
-
+        if (outbox.length === 0) flipInboxToOutbox()
         const value = outbox.pop() as T
         count -= 1
-        if (subs.dequeued > 0) {
-            emitter.emit('queue:dequeued', { item: value, size: count })
-        }
-        if (count === 0 && subs.emptied > 0) {
-            emitter.emit('queue:emptied', undefined)
-        }
-
+        emitAfterDequeue(value)
         return { value }
     }
 
-    // Public dequeue inlines the core logic to avoid the QueueSlot allocation
-    // that tryDequeue requires. Decorators use tryDequeue for the discriminant.
     const dequeue = (): T | undefined => {
         if (count === 0) return undefined
-
-        if (outbox.length === 0) {
-            flipInboxToOutbox()
-        }
-
+        if (outbox.length === 0) flipInboxToOutbox()
         const value = outbox.pop() as T
         count -= 1
-        if (subs.dequeued > 0) {
-            emitter.emit('queue:dequeued', { item: value, size: count })
-        }
-        if (count === 0 && subs.emptied > 0) {
-            emitter.emit('queue:emptied', undefined)
-        }
-
+        emitAfterDequeue(value)
         return value
     }
 
@@ -213,7 +249,6 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
         return { value }
     }
 
-    // Public peek inlines the lookup to avoid the QueueSlot allocation.
     const peek = (): T | undefined => {
         if (count === 0) return undefined
         return outbox.length > 0 ? outbox[outbox.length - 1]! : inbox[0]!
@@ -225,13 +260,12 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
 
     const clear = (): void => {
         if (count === 0) return
-
         const removed = count
         inbox = []
         outbox = []
         count = 0
-        if (subs.cleared > 0) {
-            emitter.emit('queue:cleared', { removed })
+        if (subs !== undefined && subs.cleared > 0) {
+            emitter!.emit('queue:cleared', { removed })
         }
     }
 
@@ -239,16 +273,17 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
         if (maxSize !== undefined && next.length > maxSize) {
             throw new QueueFullError(maxSize)
         }
-        inbox = [...next]
+        inbox = next.length === 0 ? [] : next.slice()
         outbox = []
         count = next.length
     }
 
-    // Single allocation: reverse-fill outbox then append inbox (head → tail).
     const toArray = (): T[] => {
         const outLen = outbox.length
         const inLen = inbox.length
-        if (outLen === 0) return [...inbox]
+        if (outLen === 0) {
+            return inLen === 0 ? [] : inbox.slice()
+        }
         const result = new Array<T>(outLen + inLen)
         for (let i = 0; i < outLen; i += 1) {
             result[i] = outbox[outLen - 1 - i]!
@@ -271,7 +306,7 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
         replaceAll,
         toArray,
         on,
-        emit: emitter.emit,
+        emit,
     }
 
     return markQueueName(api, name)

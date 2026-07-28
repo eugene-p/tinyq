@@ -44,16 +44,18 @@ export type EventEmitter<TEvents extends EventMap = EventMap> = {
 export const buildEventEmitter = <
     TEvents extends EventMap = EventMap,
 >(): EventEmitter<TEvents> => {
-    const listenersByEvent = new Map<
-        keyof TEvents,
-        EventCallback<TEvents[keyof TEvents]>[]
-    >()
+    // Null-prototype bag: fewer overheads than Map for a small event set.
+    const listenersByEvent = Object.create(null) as Record<
+        string,
+        EventCallback<TEvents[keyof TEvents]>[] | undefined
+    >
 
     const remove = <K extends keyof TEvents>(
         eventName: K,
         callback: EventCallback<TEvents[K]>,
     ): void => {
-        const listeners = listenersByEvent.get(eventName)
+        const key = eventName as string
+        const listeners = listenersByEvent[key]
         if (!listeners) return
 
         // Remove one registration (indexOf + splice). Safe during emit because
@@ -64,7 +66,7 @@ export const buildEventEmitter = <
         if (idx === -1) return
         listeners.splice(idx, 1)
         if (listeners.length === 0) {
-            listenersByEvent.delete(eventName)
+            delete listenersByEvent[key]
         }
     }
 
@@ -72,13 +74,14 @@ export const buildEventEmitter = <
         eventName: K,
         callback: EventCallback<TEvents[K]>,
     ): (() => void) => {
-        const listeners = listenersByEvent.get(eventName)
+        const key = eventName as string
+        const listeners = listenersByEvent[key]
         if (listeners) {
             listeners.push(callback as EventCallback<TEvents[keyof TEvents]>)
         } else {
-            listenersByEvent.set(eventName, [
+            listenersByEvent[key] = [
                 callback as EventCallback<TEvents[keyof TEvents]>,
-            ])
+            ]
         }
 
         return () => remove(eventName, callback)
@@ -99,9 +102,10 @@ export const buildEventEmitter = <
         }
 
         // Snapshot so subscribe/unsubscribe during emit cannot skip or double-fire listeners.
-        for (const callback of [...listeners]) {
+        const snapshot = listeners.slice()
+        for (let i = 0; i < snapshot.length; i += 1) {
             try {
-                callback(data as TEvents[keyof TEvents])
+                snapshot[i]!(data as TEvents[keyof TEvents])
             } catch {
                 // Isolate: e.g. a throwing user handler must not skip worker pump.
             }
@@ -112,8 +116,8 @@ export const buildEventEmitter = <
         eventName: K,
         data: TEvents[K],
     ): void => {
-        const listeners = listenersByEvent.get(eventName)
-        if (!listeners?.length) return
+        const listeners = listenersByEvent[eventName as string]
+        if (!listeners || listeners.length === 0) return
         dispatchTo(listeners, data)
     }
 

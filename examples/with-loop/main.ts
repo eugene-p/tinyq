@@ -9,7 +9,7 @@ import {
   withLoop,
   withWorker,
 } from '@qkitt/tinyq'
-import { line, phase, summary, title } from '../_log'
+import { line, phase, summary, title, withTimeout } from '../_log'
 
 type Job = {
   id: string
@@ -92,7 +92,7 @@ async function main() {
 
   // Do not use whenIdle alone: delayed re-enqueue leaves the queue empty
   // while a timer is pending, so idle can fire before the next hop.
-  await allDone
+  await withTimeout(allDone, 10_000, 'with-loop example')
   summary(
     `completed=${completed}  looped=${looped}  dropped=${dropped}  name=${getQueueName(queue)}`,
   )
