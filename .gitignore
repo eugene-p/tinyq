@@ -1,0 +1,57 @@
+# Dependencies
+node_modules/
+
+# Build / emit output
+dist/
+build/
+out/
+*.tsbuildinfo
+*.tgz
+
+# Test coverage
+coverage/
+
+# Vitest / Vite cache
+.vitest/
+.vite/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors / IDEs
+.idea/
+*.swp
+*.swo
+*~
+
+# Optional local tooling
+.turbo/
+.cache/
+tmp/
+temp/
+.docs/
+agent-tools/
+.grok/
+mcps/
+
+# Example runtime data (e.g. fs snapshot demo)
+examples/**/.data/
+
+# Local agent 
+AGENTS.md
+

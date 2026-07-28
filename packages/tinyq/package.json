@@ -1,0 +1,80 @@
+{
+  "name": "@qkitt/tinyq",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Fast, composable in-memory queues for TypeScript — zero runtime dependencies",
+  "license": "ISC",
+  "author": "eugene-p",
+  "keywords": [
+    "queue",
+    "fifo",
+    "worker",
+    "retry",
+    "pipeline",
+    "typescript",
+    "esm",
+    "job queue",
+    "task queue",
+    "concurrency",
+    "in-process",
+    "in-memory",
+    "zero-dependency",
+    "backpressure",
+    "event emitter",
+    "tinyq"
+  ],
+  "homepage": "https://github.com/eugene-p/qkitt-queue#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eugene-p/qkitt-queue.git",
+    "directory": "packages/tinyq"
+  },
+  "bugs": {
+    "url": "https://github.com/eugene-p/qkitt-queue/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./events": {
+      "types": "./dist/events/index.d.ts",
+      "import": "./dist/events/index.js",
+      "default": "./dist/events/index.js"
+    },
+    "./queue": {
+      "types": "./dist/queue/index.d.ts",
+      "import": "./dist/queue/index.js",
+      "default": "./dist/queue/index.js"
+    },
+    "./worker": {
+      "types": "./dist/worker/index.d.ts",
+      "import": "./dist/worker/index.js",
+      "default": "./dist/worker/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "tsup && tsc -p tsconfig.build.json && node scripts/prune-dts.mjs",
+    "pack:check": "npm pack --dry-run",
+    "release:check": "npm run typecheck && npm test && npm run build && npm run pack:check"
+  }
+}

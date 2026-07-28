@@ -1,0 +1,28 @@
+{
+  "name": "qkitt-tinyq-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build:tinyq": "npm run build -w @qkitt/tinyq",
+    "build": "npm run build -w @qkitt/tinyq",
+    "test": "npm run test -w @qkitt/tinyq",
+    "typecheck": "npm run typecheck -w @qkitt/tinyq",
+    "bench": "npm run build:tinyq && npm run bench -w @qkitt/tinyq-bench",
+    "bench:fifo": "npm run build:tinyq && npm run bench:fifo -w @qkitt/tinyq-bench",
+    "bench:worker": "npm run build:tinyq && npm run bench:worker -w @qkitt/tinyq-bench",
+    "pack:check": "npm run pack:check -w @qkitt/tinyq",
+    "release:check": "npm run typecheck && npm test && npm run build && npm run pack:check",
+    "examples": "tsx examples/worker-drain/main.ts && tsx examples/retry-pipeline/main.ts && tsx examples/with-loop/main.ts && tsx examples/with-dlq/main.ts && tsx examples/loop-and-dlq/main.ts && tsx examples/lifecycle/main.ts"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.10",
+    "tsup": "^8.5.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
