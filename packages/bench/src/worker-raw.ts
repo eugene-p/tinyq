@@ -8,7 +8,9 @@ import {
   printTimingTable,
   WORKER_RAW_CONCURRENCIES,
   WORKER_RAW_JOB_COUNTS,
+  WORKER_RAW_MEM_JOBS,
 } from './helpers.js'
+import { measureAllIsolated } from './mem/spawn.js'
 
 /** 2) workers raw — number jobs, empty body */
 
@@ -93,8 +95,15 @@ const drainAsyncQueue = (n: number, concurrency: number): Promise<void> =>
   })
 
 export const runWorkerRawBench = async (): Promise<void> => {
-  for (const jobCount of WORKER_RAW_JOB_COUNTS) {
-    for (const concurrency of WORKER_RAW_CONCURRENCIES) {
+  for (const concurrency of WORKER_RAW_CONCURRENCIES) {
+    // One empty-job mem sample per concurrency (large N → stable marginal B/item).
+    const memBase = await measureAllIsolated({
+      jobs: WORKER_RAW_MEM_JOBS,
+      payloadBytes: 0,
+      concurrency,
+    })
+
+    for (const jobCount of WORKER_RAW_JOB_COUNTS) {
       printHeader(
         `2) workers raw — empty body × ${jobCount.toLocaleString()}, c=${concurrency}`,
       )
@@ -115,7 +124,13 @@ export const runWorkerRawBench = async (): Promise<void> => {
         })
 
       await bench.run()
-      printTimingTable(bench, { jobCount })
+
+      const memory = memBase.map((row) => ({
+        name: row.name,
+        heapPerItem: row.heapPerItem,
+        heapDelta: row.heapPerItem * jobCount,
+      }))
+      printTimingTable(bench, { jobCount, memory })
     }
   }
 }

@@ -22,6 +22,22 @@ npm run bench:worker-work     # 4
 | Bare queue (1) | tinyq, denque, yocto-queue |
 | Worker (2–4) | tinyq, fastq, p-queue, async.queue |
 
-Metrics: `ops/s` + latency (fifo) or `jobs/s` + per-job latency (workers). Relative only.
+**Metrics**
 
-Published summary: [package README](../tinyq/README.md#benchmarks) · [root README](../../README.md#benchmarks).
+| Suite | Timing | Memory |
+| --- | --- | --- |
+| 1 | `ops/s`, latency | — |
+| 2 | `jobs/s`, latency | `heap Δ`, `heap/item` (empty object jobs; one process per library) |
+| 3 | `jobs/s`, latency | `heap Δ`, `heap/item` (1 KiB payloads filled in-process per library) |
+| 4 | `jobs/s`, latency | — |
+
+Retained sample is `heapUsed + arrayBuffers`. Memory probes live under `src/mem/*` (`--jobs`, `--payload`, optional `--concurrency`).
+
+```bash
+npm run mem -- --jobs 20000 --payload 0
+npm run mem -- --jobs 20000 --payload 1024
+npm run mem:tinyq -- --jobs 10000 --payload 0
+# mem:fastq · mem:p-queue · mem:async-queue
+```
+
+Relative only. Published summary: [package README](../tinyq/README.md#benchmarks) · [root README](../../README.md#benchmarks).

@@ -28,6 +28,7 @@ export const runWorkerPayloadBench = async (): Promise<void> => {
         jobCount,
         body: discard,
         label: 'payload-discard',
+        memoryPayloadBytes: WORKER_PAYLOAD_BYTES,
       })
     }
   }

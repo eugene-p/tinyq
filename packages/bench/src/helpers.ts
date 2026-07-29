@@ -1,9 +1,11 @@
 import type { Bench } from 'tinybench'
+import { formatBytes, isGcExposed, type MemRow } from './memory.js'
 import {
   bold,
   cyan,
   dim,
   green,
+  magenta,
   padEndVisible,
   padStartVisible,
   styleLibraryName,
@@ -17,6 +19,8 @@ export const FIFO_N = 200_000
 /** 2) workers raw — empty jobs, number items */
 export const WORKER_RAW_JOB_COUNTS = [1_000, 10_000] as const
 export const WORKER_RAW_CONCURRENCIES = [1, 4] as const
+/** Empty-job memory sample size (marginal B/item; scaled to each timing cell’s N). */
+export const WORKER_RAW_MEM_JOBS = 20_000
 
 /** 3–4) workers with 1 KiB payloads (discard vs work) */
 export const WORKER_PAYLOAD_BYTES = 1024
@@ -125,30 +129,64 @@ const styleLibraryCell = (plain: string): string => {
 
 export const printTimingTable = (
   bench: Bench,
-  options: { jobCount?: number } = {},
+  options: { jobCount?: number; memory?: readonly MemRow[] } = {},
 ): void => {
-  const { jobCount } = options
+  const { jobCount, memory } = options
   const rows = collectTimingRows(bench)
+  const memByName = new Map((memory ?? []).map((row) => [row.name, row] as const))
+  const withHeap = memory !== undefined && memory.length > 0
 
   if (jobCount !== undefined) {
+    const columns = withHeap
+      ? ([
+          'library',
+          'jobs/s',
+          'latency',
+          'heap Δ',
+          'heap/item',
+          'samples',
+        ] as const)
+      : (['library', 'jobs/s', 'latency', 'samples'] as const)
+
     printPlainTable(
-      ['library', 'jobs/s', 'latency', 'samples'],
-      rows.map((row) => [
-        row.library,
-        formatRate(row.opsMed * jobCount),
-        formatLatencyMs(row.latencyMedMs / jobCount),
-        row.samples.toLocaleString('en-US'),
-      ]),
+      columns,
+      rows.map((row) => {
+        const base = [
+          row.library,
+          formatRate(row.opsMed * jobCount),
+          formatLatencyMs(row.latencyMedMs / jobCount),
+        ]
+        if (withHeap) {
+          const mem = memByName.get(row.library)
+          base.push(
+            mem === undefined ? '—' : formatBytes(mem.heapDelta),
+            mem === undefined ? '—' : formatBytes(mem.heapPerItem),
+            row.samples.toLocaleString('en-US'),
+          )
+        } else {
+          base.push(row.samples.toLocaleString('en-US'))
+        }
+        return base
+      }),
       {
         styleCell: (col, plain) => {
           if (col === 0) return styleLibraryCell(plain)
           if (col === 1) return green(plain)
           if (col === 2) return yellow(plain)
-          if (col === 3) return dim(plain)
+          if (withHeap) {
+            if (col === 3 || col === 4) return magenta(plain)
+            if (col === 5) return dim(plain)
+          } else if (col === 3) {
+            return dim(plain)
+          }
           return plain
         },
       },
     )
+    if (withHeap && !isGcExposed()) {
+      console.log(dim('  tip: run with --expose-gc for tighter heap Δ'))
+      console.log('')
+    }
     return
   }
 

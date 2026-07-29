@@ -14,6 +14,11 @@
     "bench:worker": "tsx --expose-gc src/index.ts worker",
     "bench:worker-payload": "tsx --expose-gc src/index.ts worker-payload",
     "bench:worker-work": "tsx --expose-gc src/index.ts worker-work",
+    "mem": "tsx --expose-gc src/mem/run-all.ts",
+    "mem:tinyq": "tsx --expose-gc src/mem/tinyq.ts",
+    "mem:fastq": "tsx --expose-gc src/mem/fastq.ts",
+    "mem:p-queue": "tsx --expose-gc src/mem/p-queue.ts",
+    "mem:async-queue": "tsx --expose-gc src/mem/async-queue.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

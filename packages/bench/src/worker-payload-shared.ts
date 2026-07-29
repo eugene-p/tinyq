@@ -4,6 +4,7 @@ import fastq from 'fastq'
 import PQueue from 'p-queue'
 import { Bench } from 'tinybench'
 import { printTimingTable } from './helpers.js'
+import { measureAllIsolated } from './mem/spawn.js'
 
 const DRAIN_TIMEOUT_MS = 120_000
 
@@ -130,8 +131,11 @@ export const runPayloadDrainMatrix = async (options: {
   jobCount: number
   body: Body
   label: string
+  /** When set, include retained heap for N×payloadBytes jobs. */
+  memoryPayloadBytes?: number
 }): Promise<void> => {
-  const { jobs, concurrency, jobCount, body, label } = options
+  const { jobs, concurrency, jobCount, body, label, memoryPayloadBytes } =
+    options
   const bench = new Bench({ time: 800, warmupTime: 150 })
 
   bench
@@ -149,5 +153,15 @@ export const runPayloadDrainMatrix = async (options: {
     })
 
   await bench.run()
-  printTimingTable(bench, { jobCount })
+
+  const memory =
+    memoryPayloadBytes !== undefined
+      ? await measureAllIsolated({
+          jobs: jobCount,
+          payloadBytes: memoryPayloadBytes,
+          concurrency,
+        })
+      : undefined
+
+  printTimingTable(bench, { jobCount, memory })
 }

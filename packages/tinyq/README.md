@@ -391,17 +391,17 @@ npm run bench:worker-work     # 4 workers payload work
 
 Harness: [`@qkitt/tinyq-bench`](https://github.com/eugene-p/tinyq/tree/main/packages/bench).
 
-> Node v26.5.0 · Windows · `tinybench` via `tsx --expose-gc` · 2026-07-29 · median · YMMV
+> Node v26.5.0 · Windows · `tinybench` via `tsx --expose-gc` · 2026-07-28 · median · YMMV
 
-**Worker drain is the strength.** Bare FIFO is competitive but trails dedicated ring structures (denque / yocto-queue) on pure enq/deq.
+**Worker drain is the strength.** Bare FIFO is competitive but trails dedicated ring structures (denque / yocto-queue) on pure enq/deq. Suites **2** and **3** also report retained heap (`heapUsed + arrayBuffers`) per library in a separate process.
 
 ### 1) fifo raw — 200 000 numbers enq + deq
 
 | Library | ops/s | latency |
 | --- | ---: | ---: |
-| **@qkitt/tinyq** `buildQueue` | 362 | 2.77 ms |
-| denque | 572 | 1.75 ms |
-| yocto-queue | 548 | 1.83 ms |
+| **@qkitt/tinyq** `buildQueue` | 369 | 2.71 ms |
+| denque | 585 | 1.71 ms |
+| yocto-queue | 572 | 1.75 ms |
 
 ops/s = full 200k-enqueue + 200k-dequeue cycles per second.
 
@@ -409,32 +409,50 @@ ops/s = full 200k-enqueue + 200k-dequeue cycles per second.
 
 | Library | 1k c=1 | 1k c=4 | 10k c=1 | 10k c=4 |
 | --- | ---: | ---: | ---: | ---: |
-| **@qkitt/tinyq** `withWorker` | **10.94M** | **11.39M** | **11.91M** | **12.47M** |
-| fastq | 4.21M | 4.12M | 3.02M | 2.91M |
-| async.queue | 4.00M | 4.42M | 3.96M | 4.48M |
-| p-queue | 1.45M | 1.45M | 998k | 1.00M |
+| **@qkitt/tinyq** `withWorker` | **10.99M** | **11.31M** | **11.77M** | **12.22M** |
+| async.queue | 4.01M | 4.38M | 3.96M | 4.13M |
+| fastq | 4.40M | 4.20M | 2.63M | 2.15M |
+| p-queue | 1.41M | 1.45M | 1.03M | 985k |
 
-jobs/s (higher is better). Empty async body — measures drain overhead only.
+jobs/s (higher is better). Empty async body — drain overhead only.
+
+Retained **heap/item** (empty object jobs, ~approx):
+
+| Library | c=1 | c=4 |
+| --- | ---: | ---: |
+| **@qkitt/tinyq** | **~65 B** | **~62 B** |
+| async.queue | ~457 B | ~452 B |
+| fastq | ~662 B | ~661 B |
+| p-queue | ~772 B | ~852 B |
 
 ### 3) workers payload discard — 1 KiB jobs, body ignores item
 
 | Library | 5k c=1 | 5k c=4 | 20k c=1 | 20k c=4 |
 | --- | ---: | ---: | ---: | ---: |
-| **@qkitt/tinyq** `withWorker` | **10.96M** | **11.26M** | **10.62M** | **10.65M** |
-| async.queue | 3.70M | 3.86M | 3.03M | 3.12M |
-| fastq | 3.46M | 3.44M | 1.28M | 1.30M |
-| p-queue | 1.13M | 1.10M | 347k | 353k |
+| **@qkitt/tinyq** `withWorker` | **10.86M** | **11.17M** | **10.61M** | **10.91M** |
+| async.queue | 3.70M | 4.00M | 2.90M | 3.27M |
+| fastq | 3.54M | 2.91M | 1.33M | 1.30M |
+| p-queue | 1.12M | 1.09M | 343k | 347k |
+
+Retained **heap/item** with 1 KiB payloads held (~approx, 20k c=1):
+
+| Library | heap/item |
+| --- | ---: |
+| **@qkitt/tinyq** | **~1.24 KiB** |
+| async.queue | ~1.59 KiB |
+| fastq | ~1.81 KiB |
+| p-queue | ~1.95 KiB |
 
 ### 4) workers payload work — 1 KiB jobs, sum every byte
 
 | Library | 5k c=1 | 5k c=4 | 20k c=1 | 20k c=4 |
 | --- | ---: | ---: | ---: | ---: |
-| **@qkitt/tinyq** `withWorker` | **1.55M** | **1.56M** | **1.52M** | **1.56M** |
-| async.queue | 1.19M | 1.23M | 1.12M | 1.16M |
-| fastq | 1.24M | 1.15M | 772k | 747k |
-| p-queue | 676k | 677k | 291k | 289k |
+| **@qkitt/tinyq** `withWorker` | **1.52M** | **1.53M** | **1.53M** | **1.53M** |
+| async.queue | 1.18M | 1.20M | 1.10M | 1.14M |
+| fastq | 1.19M | 1.15M | 762k | 738k |
+| p-queue | 667k | 633k | 283k | 280k |
 
-Real per-job CPU (touch every byte). Gaps shrink vs empty-body suites — as expected when the body dominates.
+Real per-job CPU (touch every byte). Gaps shrink vs empty-body suites when the body dominates.
 
 ## License
 
