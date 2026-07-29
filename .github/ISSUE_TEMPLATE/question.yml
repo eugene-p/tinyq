@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        For usage questions, consider also posting in [GitHub Discussions](https://github.com/eugene-p/qkitt-queue/discussions) — answers there help future users find solutions.
+        For usage questions, consider also posting in [GitHub Discussions](https://github.com/eugene-p/tinyq/discussions) — answers there help future users find solutions.
 
   - type: textarea
     id: question

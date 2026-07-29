@@ -61,6 +61,15 @@ export type Queue<T, TEvents extends EventMap = QueueEvents<T>> = {
      * transform the payload (e.g. row unwrap).
      */
     tryPeek: () => QueueSlot<T> | undefined
+    /**
+     * Remove the head into `out.value` when the queue is non-empty.
+     * Returns `true` if an item was taken. Nullish payloads are valid.
+     *
+     * Hot-path alternative to {@link isEmpty} + {@link dequeue} (one emptiness
+     * check, no {@link QueueSlot} allocation). Decorators that override
+     * {@link dequeue} must override this too so side effects stay aligned.
+     */
+    takeTo: (out: { value: T }) => boolean
     /** Current number of items. */
     size: () => number
     /** Whether the queue has no items. */
@@ -133,8 +142,8 @@ const EVENT_SLOT: Record<string, keyof QueueSubs> = {
  *
  * Two-stack storage (O(1) amortised enqueue/dequeue). Methods are closures so
  * {@link import('./forward.util').decorateQueue} can prototype-delegate without
- * rebinding `this`. The event emitter is created on the first {@link Queue.on}
- * so bare produce/consume pays almost nothing beyond the arrays.
+ * rebinding `this`. The event emitter is created on the first {@link Queue.on};
+ * until then mutators use a branch-free bare path (no event counters).
  */
 export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
     const maxSize = options.maxSize
@@ -158,34 +167,9 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
     let outbox: T[] = []
     let count = 0
 
-    // Lazy events: no emitter until the first subscriber.
+    // Lazy events: no emitter until the first subscriber; mutators start bare.
     let emitter: EventEmitter<QueueEvents<T>> | undefined
     let subs: QueueSubs | undefined
-
-    const ensureEmitter = (): EventEmitter<QueueEvents<T>> => {
-        if (emitter !== undefined) return emitter
-        emitter = buildEventEmitter<QueueEvents<T>>()
-        subs = { enqueued: 0, dequeued: 0, emptied: 0, cleared: 0 }
-        return emitter
-    }
-
-    const on: EventEmitter<QueueEvents<T>>['on'] = (eventName, callback) => {
-        const em = ensureEmitter()
-        const unsub = em.on(eventName, callback)
-        const slot = EVENT_SLOT[eventName as string]
-        if (slot !== undefined && subs !== undefined) {
-            subs[slot] += 1
-            return () => {
-                unsub()
-                if (subs !== undefined) subs[slot] -= 1
-            }
-        }
-        return unsub
-    }
-
-    const emit: EventEmitter<QueueEvents<T>>['emit'] = (eventName, data) => {
-        emitter?.emit(eventName, data)
-    }
 
     const flipInboxToOutbox = (): void => {
         outbox = inbox
@@ -193,23 +177,69 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
         inbox = []
     }
 
-    const emitAfterDequeue = (value: T): void => {
-        if (subs === undefined) return
-        if (subs.dequeued > 0) {
-            emitter!.emit('queue:dequeued', { item: value, size: count })
-        }
-        if (count === 0 && subs.emptied > 0) {
-            emitter!.emit('queue:emptied', undefined)
-        }
+    /** Assumes `count > 0`. */
+    const removeHead = (): T => {
+        if (outbox.length === 0) flipInboxToOutbox()
+        count -= 1
+        return outbox.pop() as T
     }
 
-    // Specialise maxSize so the unbounded hot path has no capacity branch.
-    const enqueue: (item: T) => void =
+    // --- bare mutators (no event branches) ---
+
+    const enqueueBare: (item: T) => void =
         maxSize === undefined
             ? (item: T): void => {
                   inbox.push(item)
                   count += 1
-                  if (subs !== undefined && subs.enqueued > 0) {
+              }
+            : (item: T): void => {
+                  if (count >= maxSize) {
+                      throw new QueueFullError(maxSize)
+                  }
+                  inbox.push(item)
+                  count += 1
+              }
+
+    const takeToBare = (out: { value: T }): boolean => {
+        if (count === 0) return false
+        out.value = removeHead()
+        return true
+    }
+
+    const dequeueBare = (): T | undefined => {
+        if (count === 0) return undefined
+        return removeHead()
+    }
+
+    const tryDequeueBare = (): QueueSlot<T> | undefined => {
+        if (count === 0) return undefined
+        return { value: removeHead() }
+    }
+
+    const clearBare = (): void => {
+        if (count === 0) return
+        inbox = []
+        outbox = []
+        count = 0
+    }
+
+    // --- event-aware mutators (installed on first `on`) ---
+
+    const emitAfterDequeue = (value: T): void => {
+        if (subs!.dequeued > 0) {
+            emitter!.emit('queue:dequeued', { item: value, size: count })
+        }
+        if (count === 0 && subs!.emptied > 0) {
+            emitter!.emit('queue:emptied', undefined)
+        }
+    }
+
+    const enqueueLoud: (item: T) => void =
+        maxSize === undefined
+            ? (item: T): void => {
+                  inbox.push(item)
+                  count += 1
+                  if (subs!.enqueued > 0) {
                       emitter!.emit('queue:enqueued', { item, size: count })
                   }
               }
@@ -219,27 +249,42 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
                   }
                   inbox.push(item)
                   count += 1
-                  if (subs !== undefined && subs.enqueued > 0) {
+                  if (subs!.enqueued > 0) {
                       emitter!.emit('queue:enqueued', { item, size: count })
                   }
               }
 
-    const tryDequeue = (): QueueSlot<T> | undefined => {
+    const takeToLoud = (out: { value: T }): boolean => {
+        if (count === 0) return false
+        const value = removeHead()
+        out.value = value
+        emitAfterDequeue(value)
+        return true
+    }
+
+    const dequeueLoud = (): T | undefined => {
         if (count === 0) return undefined
-        if (outbox.length === 0) flipInboxToOutbox()
-        const value = outbox.pop() as T
-        count -= 1
+        const value = removeHead()
+        emitAfterDequeue(value)
+        return value
+    }
+
+    const tryDequeueLoud = (): QueueSlot<T> | undefined => {
+        if (count === 0) return undefined
+        const value = removeHead()
         emitAfterDequeue(value)
         return { value }
     }
 
-    const dequeue = (): T | undefined => {
-        if (count === 0) return undefined
-        if (outbox.length === 0) flipInboxToOutbox()
-        const value = outbox.pop() as T
-        count -= 1
-        emitAfterDequeue(value)
-        return value
+    const clearLoud = (): void => {
+        if (count === 0) return
+        const removed = count
+        inbox = []
+        outbox = []
+        count = 0
+        if (subs!.cleared > 0) {
+            emitter!.emit('queue:cleared', { removed })
+        }
     }
 
     const tryPeek = (): QueueSlot<T> | undefined => {
@@ -257,17 +302,6 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
     const size = (): number => count
 
     const isEmpty = (): boolean => count === 0
-
-    const clear = (): void => {
-        if (count === 0) return
-        const removed = count
-        inbox = []
-        outbox = []
-        count = 0
-        if (subs !== undefined && subs.cleared > 0) {
-            emitter!.emit('queue:cleared', { removed })
-        }
-    }
 
     const replaceAll = (next: readonly T[]): void => {
         if (maxSize !== undefined && next.length > maxSize) {
@@ -294,19 +328,56 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
         return result
     }
 
-    const api: Queue<T> = {
-        enqueue,
-        dequeue,
+    // Built before `on`/`emit` so first-subscribe can swap bare mutators in place.
+    const api = {
+        enqueue: enqueueBare,
+        dequeue: dequeueBare,
         peek,
-        tryDequeue,
+        tryDequeue: tryDequeueBare,
         tryPeek,
+        takeTo: takeToBare,
         size,
         isEmpty,
-        clear,
+        clear: clearBare,
         replaceAll,
         toArray,
-        on,
-        emit,
+    } as Queue<T>
+
+    /** Swap bare mutators for loud ones; skip slots the user already replaced. */
+    const installEventMutators = (): void => {
+        if (api.enqueue === enqueueBare) api.enqueue = enqueueLoud
+        if (api.dequeue === dequeueBare) api.dequeue = dequeueLoud
+        if (api.tryDequeue === tryDequeueBare) api.tryDequeue = tryDequeueLoud
+        if (api.takeTo === takeToBare) api.takeTo = takeToLoud
+        if (api.clear === clearBare) api.clear = clearLoud
+    }
+
+    const ensureEmitter = (): EventEmitter<QueueEvents<T>> => {
+        if (emitter !== undefined) return emitter
+        emitter = buildEventEmitter<QueueEvents<T>>()
+        subs = { enqueued: 0, dequeued: 0, emptied: 0, cleared: 0 }
+        return emitter
+    }
+
+    api.on = (eventName, callback) => {
+        const em = ensureEmitter()
+        const unsub = em.on(eventName, callback)
+        // Only queue:* subscriptions need event-aware mutators. Worker/layer
+        // events share this emitter but must not tax bare enqueue/takeTo.
+        const slot = EVENT_SLOT[eventName as string]
+        if (slot !== undefined && subs !== undefined) {
+            installEventMutators()
+            subs[slot] += 1
+            return () => {
+                unsub()
+                if (subs !== undefined) subs[slot] -= 1
+            }
+        }
+        return unsub
+    }
+
+    api.emit = (eventName, data) => {
+        emitter?.emit(eventName, data)
     }
 
     return markQueueName(api, name)

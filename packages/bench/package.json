@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Non-publishable benchmarks for @qkitt/tinyq vs in-process peers",
+  "description": "Benchmarks for @qkitt/tinyq vs in-process peers",
   "license": "ISC",
   "engines": {
     "node": ">=20"
@@ -12,6 +12,8 @@
     "bench": "tsx --expose-gc src/index.ts",
     "bench:fifo": "tsx --expose-gc src/index.ts fifo",
     "bench:worker": "tsx --expose-gc src/index.ts worker",
+    "bench:worker-payload": "tsx --expose-gc src/index.ts worker-payload",
+    "bench:worker-work": "tsx --expose-gc src/index.ts worker-work",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

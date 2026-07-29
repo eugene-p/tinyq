@@ -23,14 +23,14 @@
     "event emitter",
     "tinyq"
   ],
-  "homepage": "https://github.com/eugene-p/qkitt-queue#readme",
+  "homepage": "https://github.com/eugene-p/tinyq#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/eugene-p/qkitt-queue.git",
+    "url": "git+https://github.com/eugene-p/tinyq.git",
     "directory": "packages/tinyq"
   },
   "bugs": {
-    "url": "https://github.com/eugene-p/qkitt-queue/issues"
+    "url": "https://github.com/eugene-p/tinyq/issues"
   },
   "engines": {
     "node": ">=20"

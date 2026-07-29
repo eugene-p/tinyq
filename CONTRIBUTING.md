@@ -1,12 +1,12 @@
-# Contributing to qkitt-tinyq
+# Contributing to tinyq
 
 Thanks for your interest in contributing! This document covers everything you need to get started.
 
 ## Development setup
 
 ```bash
-git clone https://github.com/eugene-p/qkitt-queue.git
-cd qkitt-queue
+git clone https://github.com/eugene-p/tinyq.git
+cd tinyq
 npm install
 ```
 
@@ -16,9 +16,9 @@ Requires Node.js >= 20 (`engines`). CI tests on Node 20, 22, 24, and 26. The rep
 
 | Command | What it does |
 | --- | --- |
-| `npm test` | Run queue package tests |
-| `npm run typecheck` | Type-check the queue package |
-| `npm run build` | Build the queue package |
+| `npm test` | Run @qkitt/tinyq tests |
+| `npm run typecheck` | Type-check @qkitt/tinyq |
+| `npm run build` | Build @qkitt/tinyq |
 | `npm run bench` | Run benchmarks against peer libraries |
 | `npm run examples` | Run all runnable examples |
 | `npm run release:check` | Full pre-release gate: typecheck + test + build + pack |
@@ -52,15 +52,15 @@ examples/         Runnable use-case demos
 
 ## Reporting bugs
 
-Use the [bug report template](https://github.com/eugene-p/qkitt-queue/issues/new?template=bug_report.yml). Include a minimal reproduction if possible — a short snippet or a link to a StackBlitz/CodeSandbox helps enormously.
+Use the [bug report template](https://github.com/eugene-p/tinyq/issues/new?template=bug_report.yml). Include a minimal reproduction if possible — a short snippet or a link to a StackBlitz/CodeSandbox helps enormously.
 
 ## Feature requests
 
-Use the [feature request template](https://github.com/eugene-p/qkitt-queue/issues/new?template=feature_request.yml). Describe the use case and the API shape you'd expect. Not every request will be accepted — the library intentionally stays small — but every request gets read.
+Use the [feature request template](https://github.com/eugene-p/tinyq/issues/new?template=feature_request.yml). Describe the use case and the API shape you'd expect. Not every request will be accepted — the library intentionally stays small — but every request gets read.
 
 ## Questions
 
-For "how do I…" questions, prefer [GitHub Discussions](https://github.com/eugene-p/qkitt-queue/discussions) over issues. It keeps the issue tracker focused on actionable work and helps other users find answers.
+For "how do I…" questions, prefer [GitHub Discussions](https://github.com/eugene-p/tinyq/discussions) over issues. It keeps the issue tracker focused on actionable work and helps other users find answers.
 
 ## License
 

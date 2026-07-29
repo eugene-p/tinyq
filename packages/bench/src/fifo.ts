@@ -2,15 +2,11 @@ import { buildQueue } from '@qkitt/tinyq'
 import { Bench } from 'tinybench'
 import Denque from 'denque'
 import Queue from 'yocto-queue'
-import { FIFO_N, printHeader } from './helpers.js'
-import { measureRetained, printMemoryTable } from './memory.js'
+import { FIFO_N, printHeader, printTimingTable } from './helpers.js'
 
-/**
- * Bare FIFO microbench: enqueue N then dequeue N.
- * Structure-only — no workers, events, or async.
- */
+/** 1) fifo raw — enq/deq numbers, no worker */
 export const runFifoBench = async (): Promise<void> => {
-  printHeader(`Bare FIFO (enqueue+dequeue × ${FIFO_N.toLocaleString()})`)
+  printHeader(`1) fifo raw — numbers × ${FIFO_N.toLocaleString()}`)
 
   const bench = new Bench({ time: 500, warmupTime: 100 })
 
@@ -30,36 +26,7 @@ export const runFifoBench = async (): Promise<void> => {
       for (let i = 0; i < FIFO_N; i++) q.enqueue(i)
       for (let i = 0; i < FIFO_N; i++) q.dequeue()
     })
-    .add('native Array push/shift', () => {
-      const q: number[] = []
-      for (let i = 0; i < FIFO_N; i++) q.push(i)
-      for (let i = 0; i < FIFO_N; i++) q.shift()
-    })
 
   await bench.run()
-  console.table(bench.table())
-
-  // Retained heap with N items still in the queue (structure cost).
-  printMemoryTable([
-    measureRetained('@qkitt/tinyq buildQueue', () => {
-      const q = buildQueue<number>()
-      for (let i = 0; i < FIFO_N; i++) q.enqueue(i)
-      return q
-    }),
-    measureRetained('denque', () => {
-      const q = new Denque<number>()
-      for (let i = 0; i < FIFO_N; i++) q.push(i)
-      return q
-    }),
-    measureRetained('yocto-queue', () => {
-      const q = new Queue<number>()
-      for (let i = 0; i < FIFO_N; i++) q.enqueue(i)
-      return q
-    }),
-    measureRetained('native Array', () => {
-      const q: number[] = []
-      for (let i = 0; i < FIFO_N; i++) q.push(i)
-      return q
-    }),
-  ])
+  printTimingTable(bench)
 }

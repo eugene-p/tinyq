@@ -1,14 +1,14 @@
 <p align="center" style="margin-bottom:0px;">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="./assets/logo-dark.svg">
-    <img src="./assets/logo.svg" alt="qkitt-tinyq" width="150" height="150">
+    <img src="./assets/logo.svg" alt="tinyq" width="150" height="150">
   </picture>
 </p>
 
 <h1 align="center" style="padding-bottom:2rem; margin-top:0px">Composable in-process queues for TypeScript</h1>
 
-[![CI](https://github.com/eugene-p/qkitt-queue/actions/workflows/ci.yml/badge.svg)](https://github.com/eugene-p/qkitt-queue/actions/workflows/ci.yml)
-[![npm @qkitt/tinyq](https://img.shields.io/npm/v/@qkitt/tinyq.svg?label=%40qkitt%2Fqueue)](https://www.npmjs.com/package/@qkitt/tinyq)
+[![CI](https://github.com/eugene-p/tinyq/actions/workflows/ci.yml/badge.svg)](https://github.com/eugene-p/tinyq/actions/workflows/ci.yml)
+[![npm @qkitt/tinyq](https://img.shields.io/npm/v/@qkitt/tinyq.svg?label=%40qkitt%2Ftinyq)](https://www.npmjs.com/package/@qkitt/tinyq)
 [![License: ISC](https://img.shields.io/npm/l/@qkitt/tinyq.svg)](./LICENSE)
 [![Node.js](https://img.shields.io/node/v/@qkitt/tinyq.svg)](https://nodejs.org)
 
@@ -30,11 +30,11 @@ Fast **in-memory** queue toolkit. Start bare, add a layer as requirements change
 
 - **FIFO backlog** — hold work in order until something drains it.
 - **Concurrent workers** — drain that backlog with a concurrency cap.
-- **Retries** — survive flaky third-party calls.
+- **Retries** — survive flaky third-party calls (`retryWorker`).
 - **Pipelines** — fixed stages per item (validate → charge → confirm).
-- **Failure routing** — fair same-queue re-entry with hop meta (`withLoop`), or park failures on a sink queue you drain later (`withDlq`).
+- **Failure routing** — fair same-queue re-entry with hop meta (`withLoop`), or park failures on a sink you drain later (`withDlq`).
 
-**Out of scope:** work that spans machines or processes; durable / persisted queues; topic routers.
+**Out of scope:** work that spans machines or processes; durable / persisted queues.
 
 ## Install
 
@@ -44,10 +44,10 @@ npm install @qkitt/tinyq
 
 ## Quick start
 
-Minimal concurrent drain:
+### Concurrent drain
 
 ```ts
-import { buildQueue, withWorker } from '@qkitt/tinyq'
+import { buildQueue, withWorker, whenIdle } from '@qkitt/tinyq'
 
 type Job = { id: string }
 
@@ -56,13 +56,16 @@ const queue = withWorker(
   async (job) => {
     // handle job
   },
-  { concurrency: 2 },
+  { concurrency: 4 },
 )
 
 queue.enqueue({ id: '1' })
+await whenIdle(queue, { timeoutMs: 30_000 })
 ```
 
-Retries or multi-step workers — compose a worker function, then pass it to `withWorker`:
+### Retries or multi-step workers
+
+Compose a worker function, then pass it to `withWorker`:
 
 ```ts
 import {
@@ -81,6 +84,8 @@ const queue = withWorker(buildQueue<Job>(), run, { concurrency: 4 })
 ```
 
 Failed items are **not** re-queued. Use `retryWorker` for in-call retries, `withDlq` to park failures on a sink you consume on your schedule, or `withLoop` for fair same-queue re-entry (hop meta on `__tq`).
+
+Full API, options, events, and errors: [`packages/tinyq/README.md`](./packages/tinyq/README.md#api).
 
 ## Examples
 
@@ -105,7 +110,7 @@ Full task index: [`examples/README.md`](./examples/README.md).
 
 | Link | Covers |
 | --- | --- |
-| [`@qkitt/tinyq`](./packages/tinyq/README.md) | Install, quick start, recipes, bench summary |
+| [`@qkitt/tinyq`](./packages/tinyq/README.md) | Install, quick start, recipes, **API**, benchmarks |
 | [`packages/bench`](./packages/bench/README.md) | Benchmark harness — how to re-run |
 | [`examples/`](./examples) | Runnable use cases |
 
@@ -122,35 +127,50 @@ npm run bench
 
 ## Benchmarks
 
-Details and setup: [`packages/bench`](./packages/bench) · re-run: `npm run bench` · summary also in the [queue package README](./packages/tinyq/README.md#benchmark-summary).
+Four suites only. Details and setup: [`packages/bench`](./packages/bench) · re-run: `npm run bench` · full tables also in the [package README](./packages/tinyq/README.md#benchmarks).
 
-> AMD Ryzen 7 4800HS (8c/16t) · 16 GB · Windows 11 · Node 26.5.0 · `tinybench` via `tsx --expose-gc` · 2026-07-28 · YMMV
+> Node v26.5.0 · Windows · `tinybench` via `tsx --expose-gc` · 2026-07-29 · median · YMMV
 
-**Worker drain is the strength** — high ops/s and low retained memory under a backlog. Bare FIFO is competitive on heap and far faster than `Array#shift`; pure enqueue/dequeue ops trail dedicated structures like denque / yocto-queue.
+**Worker drain is the strength.** Bare FIFO trails dedicated structures (denque / yocto-queue) on pure enq/deq; with a real worker body, tinyq leads peers on jobs/s.
 
-### Worker drain — N async no-op jobs, concurrency C
+### 1) fifo raw — 200 000 numbers enq + deq
 
-| Library | 1k c=1 | 1k c=4 | 10k c=1 | 10k c=4 | heap Δ (10k c=1) |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| **@qkitt/tinyq** `withWorker` | **11,403** | **12,255** | **1,264** | **1,189** | **~250 KiB** |
-| fastq | 3,927 | 3,823 | 299 | 189 | 6.73 MiB |
-| async.queue | 3,683 | 3,831 | 358 | 383 | 4.97 MiB |
-| p-queue | 1,317 | 1,201 | 99 | 92 | 11.21 MiB |
-
-### Bare queue — 50k enqueue + dequeue
-
-| Library | ops/s (med) | heap Δ |
+| Library | ops/s | latency |
 | --- | ---: | ---: |
-| **@qkitt/tinyq** `buildQueue` | 1,606 | 1.19 MiB |
-| denque | 2,139 | 1.47 MiB |
-| yocto-queue | 2,197 | 1.92 MiB |
-| native `Array` push/shift | 8 | 1.19 MiB |
+| **@qkitt/tinyq** `buildQueue` | 362 | 2.77 ms |
+| denque | 572 | 1.75 ms |
+| yocto-queue | 548 | 1.83 ms |
 
-Median ops/s, higher is better. Heap Δ = retained memory measured with all items still held (worker paused).
+### 2) workers raw — empty body (jobs/s)
+
+| Library | 1k c=1 | 1k c=4 | 10k c=1 | 10k c=4 |
+| --- | ---: | ---: | ---: | ---: |
+| **@qkitt/tinyq** `withWorker` | **10.94M** | **11.39M** | **11.91M** | **12.47M** |
+| fastq | 4.21M | 4.12M | 3.02M | 2.91M |
+| async.queue | 4.00M | 4.42M | 3.96M | 4.48M |
+| p-queue | 1.45M | 1.45M | 998k | 1.00M |
+
+### 3) workers payload discard — 1 KiB jobs, body ignores item (jobs/s)
+
+| Library | 5k c=1 | 5k c=4 | 20k c=1 | 20k c=4 |
+| --- | ---: | ---: | ---: | ---: |
+| **@qkitt/tinyq** `withWorker` | **10.96M** | **11.26M** | **10.62M** | **10.65M** |
+| async.queue | 3.70M | 3.86M | 3.03M | 3.12M |
+| fastq | 3.46M | 3.44M | 1.28M | 1.30M |
+| p-queue | 1.13M | 1.10M | 347k | 353k |
+
+### 4) workers payload work — 1 KiB jobs, sum every byte (jobs/s)
+
+| Library | 5k c=1 | 5k c=4 | 20k c=1 | 20k c=4 |
+| --- | ---: | ---: | ---: | ---: |
+| **@qkitt/tinyq** `withWorker` | **1.55M** | **1.56M** | **1.52M** | **1.56M** |
+| async.queue | 1.19M | 1.23M | 1.12M | 1.16M |
+| fastq | 1.24M | 1.15M | 772k | 747k |
+| p-queue | 676k | 677k | 291k | 289k |
 
 ## Contributing
 
-Contributions are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, code style, and PR expectations. For usage questions, prefer [GitHub Discussions](https://github.com/eugene-p/qkitt-queue/discussions).
+Contributions are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, code style, and PR expectations. For usage questions, prefer [GitHub Discussions](https://github.com/eugene-p/tinyq/discussions).
 
 ## License
 

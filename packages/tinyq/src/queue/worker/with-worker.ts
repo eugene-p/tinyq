@@ -102,8 +102,12 @@ const isThenable = (value: unknown): value is PromiseLike<unknown> =>
  * Inner decorator extras are preserved at runtime and in the return type.
  *
  * Dequeue failures emit `worker:pump-error` and stop the worker. Nullish
- * payloads are valid — the pump uses `isEmpty` + `dequeue` so emptiness is
- * structural, not value-based (no per-item {@link import('../core/queue').QueueSlot} allocation).
+ * payloads are valid — the pump uses {@link import('../core/queue').Queue.takeTo}
+ * so emptiness is structural (one check, no per-item
+ * {@link import('../core/queue').QueueSlot} allocation).
+ *
+ * Mutators are read live off `inner` so bare→event method swaps on first
+ * `queue.on` still apply under the worker.
  */
 export const withWorker = <
     T,
@@ -120,10 +124,8 @@ export const withWorker = <
     const autoStart = options.autoStart ?? true
 
     const inner = queue
-    const baseEnqueue = inner.enqueue
-    const baseReplaceAll = inner.replaceAll
-    const baseIsEmpty = inner.isEmpty
-    const baseDequeue = inner.dequeue
+    /** Reused by the pump — never retained across async turns as the sole item ref. */
+    const takeOut: { value: T } = { value: undefined as T }
     const emitInner = inner.emit as (
         eventName: string,
         data: unknown,
@@ -153,7 +155,7 @@ export const withWorker = <
     const finishItem = (): void => {
         active -= 1
 
-        if (active === 0 && baseIsEmpty() && subs.idle > 0) {
+        if (active === 0 && inner.isEmpty() && subs.idle > 0) {
             emitInner('worker:idle', undefined)
         }
 
@@ -222,11 +224,14 @@ export const withWorker = <
     const pump = (): void => {
         if (pumping) return
         pumping = true
+        // Resolve once per pump — bare→loud may swap on queue:* subscribe,
+        // but not mid-drain under normal use.
+        const takeTo = inner.takeTo
         try {
             while (running && active < concurrency) {
-                // isEmpty + dequeue: no QueueSlot alloc; nullish payloads remain valid.
-                if (baseIsEmpty()) break
-                const item = baseDequeue() as T
+                // takeTo: one emptiness check; nullish payloads remain valid.
+                if (!takeTo(takeOut)) break
+                const item = takeOut.value
                 active += 1
                 processItem(item)
             }
@@ -249,13 +254,14 @@ export const withWorker = <
 
     /** Enqueue then pump — no `queue:enqueued` subscription on the hot path. */
     const enqueue = (item: T): void => {
-        baseEnqueue(item)
+        // Live property: bare→loud swap on first queue:* subscriber.
+        inner.enqueue(item)
         pump()
     }
 
     /** Bulk load then pump so preloaded work starts without a separate start race. */
     const replaceAll = (items: readonly T[]): void => {
-        baseReplaceAll(items)
+        inner.replaceAll(items)
         pump()
     }
 

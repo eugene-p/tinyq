@@ -247,14 +247,14 @@ describe('withWorker', () => {
 
     it('emits worker:pump-error and stops on unexpected dequeue failures', async () => {
         const queue = buildQueue<number>()
-        const originalDequeue = queue.dequeue.bind(queue)
+        const originalTakeTo = queue.takeTo.bind(queue)
         let failNext = false
         const boom = new Error('custom dequeue failure')
-        queue.dequeue = () => {
+        queue.takeTo = (out) => {
             if (failNext) {
                 throw boom
             }
-            return originalDequeue()
+            return originalTakeTo(out)
         }
 
         let release!: () => void

@@ -229,4 +229,66 @@ describe('buildQueue', () => {
         expect(queue.isEmpty()).toBe(true)
         expect(queue.dequeue()).toBeUndefined()
     })
+
+    it('takeTo writes the head and returns false only when empty', () => {
+        const queue = buildQueue<number>()
+        const out: { value: number } = { value: -1 }
+
+        expect(queue.takeTo(out)).toBe(false)
+        expect(out.value).toBe(-1)
+
+        queue.enqueue(1)
+        queue.enqueue(2)
+        expect(queue.takeTo(out)).toBe(true)
+        expect(out.value).toBe(1)
+        expect(queue.takeTo(out)).toBe(true)
+        expect(out.value).toBe(2)
+        expect(queue.takeTo(out)).toBe(false)
+        expect(queue.isEmpty()).toBe(true)
+    })
+
+    it('takeTo accepts nullish payloads as occupied', () => {
+        const queue = buildQueue<string | null | undefined>()
+        const out: { value: string | null | undefined } = { value: 'sentinel' }
+
+        queue.enqueue(undefined)
+        expect(queue.takeTo(out)).toBe(true)
+        expect(out.value).toBeUndefined()
+
+        queue.enqueue(null)
+        expect(queue.takeTo(out)).toBe(true)
+        expect(out.value).toBeNull()
+        expect(queue.takeTo(out)).toBe(false)
+    })
+
+    it('takeTo emits queue:dequeued / queue:emptied when subscribed', () => {
+        const queue = buildQueue<number>()
+        const dequeued = vi.fn()
+        const emptied = vi.fn()
+        queue.on('queue:dequeued', dequeued)
+        queue.on('queue:emptied', emptied)
+
+        const out: { value: number } = { value: 0 }
+        queue.enqueue(7)
+        expect(queue.takeTo(out)).toBe(true)
+        expect(out.value).toBe(7)
+        expect(dequeued).toHaveBeenCalledWith({ item: 7, size: 0 })
+        expect(emptied).toHaveBeenCalledOnce()
+    })
+
+    it('subscribing after cold produce still receives later queue events', () => {
+        const queue = buildQueue<string>()
+        queue.enqueue('cold')
+        expect(queue.dequeue()).toBe('cold')
+
+        const enqueued = vi.fn()
+        const dequeued = vi.fn()
+        queue.on('queue:enqueued', enqueued)
+        queue.on('queue:dequeued', dequeued)
+
+        queue.enqueue('hot')
+        expect(enqueued).toHaveBeenCalledWith({ item: 'hot', size: 1 })
+        expect(queue.dequeue()).toBe('hot')
+        expect(dequeued).toHaveBeenCalledWith({ item: 'hot', size: 0 })
+    })
 })

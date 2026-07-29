@@ -1,5 +1,5 @@
 {
-  "name": "qkitt-tinyq-monorepo",
+  "name": "tinyq-monorepo",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -12,6 +12,8 @@
     "bench": "npm run build:tinyq && npm run bench -w @qkitt/tinyq-bench",
     "bench:fifo": "npm run build:tinyq && npm run bench:fifo -w @qkitt/tinyq-bench",
     "bench:worker": "npm run build:tinyq && npm run bench:worker -w @qkitt/tinyq-bench",
+    "bench:worker-payload": "npm run build:tinyq && npm run bench:worker-payload -w @qkitt/tinyq-bench",
+    "bench:worker-work": "npm run build:tinyq && npm run bench:worker-work -w @qkitt/tinyq-bench",
     "pack:check": "npm run pack:check -w @qkitt/tinyq",
     "release:check": "npm run typecheck && npm test && npm run build && npm run pack:check",
     "examples": "tsx examples/worker-drain/main.ts && tsx examples/retry-pipeline/main.ts && tsx examples/with-loop/main.ts && tsx examples/with-dlq/main.ts && tsx examples/loop-and-dlq/main.ts && tsx examples/lifecycle/main.ts"
