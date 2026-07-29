@@ -212,6 +212,18 @@ export const withLoop = <
         callback: EventCallback<unknown>,
     ) => () => void
 
+    const emitLoopError = (item: T, error: unknown, cause: unknown): void => {
+        emitInner('loop:error', {
+            item,
+            error,
+            cause: new LoopEnqueueError('withLoop: failed to re-enqueue item', {
+                cause,
+                item,
+                workerError: error,
+            }),
+        })
+    }
+
     onInner('worker:failed', (payload) => {
         const { item, error } = payload as { item: T; error: unknown }
         try {
@@ -228,7 +240,7 @@ export const withLoop = <
                     ? userMap(item, error, ctx)
                     : item
 
-                const originalMeta = isPlainQueueMeta(item)
+                const originalMeta = readMappedQueueMeta(item)
                 const attempted = readMappedQueueMeta(mapped)
                 if (
                     attempted !== undefined &&
@@ -253,15 +265,7 @@ export const withLoop = <
                     try {
                         reEnqueue()
                     } catch (cause) {
-                        const wrapped = new LoopEnqueueError(
-                            'withLoop: failed to re-enqueue item',
-                            { cause, item, workerError: error },
-                        )
-                        emitInner('loop:error', {
-                            item,
-                            error,
-                            cause: wrapped,
-                        })
+                        emitLoopError(item, error, cause)
                     }
                 }, wait)
                 return
@@ -269,11 +273,7 @@ export const withLoop = <
 
             reEnqueue()
         } catch (cause) {
-            const wrapped = new LoopEnqueueError(
-                'withLoop: failed to re-enqueue item',
-                { cause, item, workerError: error },
-            )
-            emitInner('loop:error', { item, error, cause: wrapped })
+            emitLoopError(item, error, cause)
         }
     })
 
@@ -285,14 +285,6 @@ export const withLoop = <
         LoopQueueEvents<T, U, TEvents, R>
     > &
         PreserveQueueExtras<TQueue>
-}
-
-const isPlainQueueMeta = (item: unknown): unknown => {
-    if (item === null || typeof item !== 'object') return undefined
-    if (!Object.prototype.hasOwnProperty.call(item, TQ_KEY)) {
-        return undefined
-    }
-    return (item as Record<string, unknown>)[TQ_KEY]
 }
 
 export { getLoopHops, TQ_KEY }

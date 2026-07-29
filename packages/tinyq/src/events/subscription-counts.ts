@@ -18,18 +18,18 @@ export const createSubscriptionCounts = <
     wrapOn: <On>(on: On) => On
 } => {
     const counts = {} as { [P in keyof M]: number }
-    const slotByEvent = new Map<string, keyof M>()
+    const slotByEvent = Object.create(null) as Record<string, keyof M>
 
     for (const slot of Object.keys(eventBySlot) as (keyof M)[]) {
         counts[slot] = 0
-        slotByEvent.set(eventBySlot[slot], slot)
+        slotByEvent[eventBySlot[slot]] = slot
     }
 
     const wrapOn = <On>(on: On): On => {
         const base = on as unknown as LooseOn
         const wrapped: LooseOn = (eventName, callback) => {
             const unsubscribe = base(eventName, callback)
-            const slot = slotByEvent.get(eventName)
+            const slot = slotByEvent[eventName]
             if (slot === undefined) return unsubscribe
             counts[slot] += 1
             return () => {

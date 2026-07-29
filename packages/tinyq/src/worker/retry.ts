@@ -7,6 +7,7 @@ import {
     isIntegerInRange,
     isNonNegativeFinite,
 } from '../util/number.util'
+import { scheduleTimeout } from '../util/schedule-timeout.util'
 import type { WorkerFn } from './types'
 
 export type RetryOptions = {
@@ -49,13 +50,7 @@ export class RetryExhaustedError extends Error {
 
 const sleep = (ms: number): Promise<void> =>
     new Promise((resolve) => {
-        // Avoid depending on DOM lib typings (tsconfig uses empty `types`).
-        const schedule = (
-            globalThis as unknown as {
-                setTimeout: (fn: () => void, delay: number) => unknown
-            }
-        ).setTimeout
-        schedule(resolve, ms)
+        scheduleTimeout(resolve, ms)
     })
 
 const requireDelayMs = (

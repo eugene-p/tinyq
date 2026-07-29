@@ -85,7 +85,7 @@ const queue = withWorker(buildQueue<Job>(), run, { concurrency: 4 })
 
 Failed items are **not** re-queued. Use `retryWorker` for in-call retries, `withDlq` to park failures on a sink you consume on your schedule, or `withLoop` for fair same-queue re-entry (hop meta on `__tq`).
 
-Full API, options, events, and errors: [`packages/tinyq/README.md`](./packages/tinyq/README.md#api).
+Full API, options, events, and errors: [`packages/tinyq/API.md`](./packages/tinyq/API.md).
 
 ## Examples
 
@@ -110,7 +110,8 @@ Full task index: [`examples/README.md`](./examples/README.md).
 
 | Link | Covers |
 | --- | --- |
-| [`@qkitt/tinyq`](./packages/tinyq/README.md) | Install, quick start, recipes, **API**, benchmarks |
+| [`@qkitt/tinyq`](./packages/tinyq/README.md) | Install, quick start, recipes |
+| [`packages/tinyq/API.md`](./packages/tinyq/API.md) | Full API, options, events, errors |
 | [`packages/bench`](./packages/bench/README.md) | Benchmark harness — how to re-run |
 | [`examples/`](./examples) | Runnable use cases |
 
@@ -127,7 +128,7 @@ npm run bench
 
 ## Benchmarks
 
-Four suites only. Details and setup: [`packages/bench`](./packages/bench) · re-run: `npm run bench` · full tables also in the [package README](./packages/tinyq/README.md#benchmarks).
+Four suites only. Details and setup: [`packages/bench`](./packages/bench) · re-run: `npm run bench`.
 
 > Node v26.5.0 · Windows · `tinybench` via `tsx --expose-gc` · 2026-07-28 · median · YMMV
 
