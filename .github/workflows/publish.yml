@@ -1,15 +1,13 @@
 name: Publish
 
-# Automatic npm publish is disabled while the fork is still being cleaned.
-# Re-enable the `push.tags` triggers below before the first release.
 on:
   workflow_dispatch:
-  # push:
-  #   tags:
-  #     # Flat monorepo tags: v0.1.0
-  #     - "v*"
-  #     # Package-scoped tags: tinyq-v0.1.0 → publish only packages/tinyq@0.1.0
-  #     - "*-v*"
+  push:
+    tags:
+      # Flat monorepo tags: v0.1.0
+      - "v*"
+      # Package-scoped tags: tinyq-v0.1.0 → publish only packages/tinyq@0.1.0
+      - "*-v*"
 
 permissions:
   contents: read
