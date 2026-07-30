@@ -1,4 +1,6 @@
 import {
+  type BenchMode,
+  isFullBenchMode,
   makePayloads,
   printHeader,
   WORKER_PAYLOAD_BYTES,
@@ -7,7 +9,7 @@ import {
 } from './helpers.js'
 import { runPayloadDrainMatrix } from './worker-payload-shared.js'
 
-/** 4) workers payload + work — 1 KiB jobs, sum every byte */
+/** 3) workers payload + work — 1 KiB jobs, sum every byte */
 
 const sumBytes = (buf: Uint8Array): void => {
   let sum = 0
@@ -17,15 +19,16 @@ const sumBytes = (buf: Uint8Array): void => {
   void sum
 }
 
-export const runWorkerWorkBench = async (): Promise<void> => {
-  const maxN = Math.max(...WORKER_PAYLOAD_JOB_COUNTS)
+export const runWorkerWorkBench = async (mode: BenchMode): Promise<void> => {
+  const jobCounts = isFullBenchMode(mode) ? WORKER_PAYLOAD_JOB_COUNTS : [5_000]
+  const maxN = Math.max(...jobCounts)
   const pool = makePayloads(maxN, WORKER_PAYLOAD_BYTES)
 
-  for (const jobCount of WORKER_PAYLOAD_JOB_COUNTS) {
+  for (const jobCount of jobCounts) {
     const jobs = pool.slice(0, jobCount)
     for (const concurrency of WORKER_PAYLOAD_CONCURRENCIES) {
       printHeader(
-        `4) workers payload work — ${jobCount.toLocaleString()} × ${WORKER_PAYLOAD_BYTES} B sum, c=${concurrency}`,
+        `3) workers payload work — ${jobCount.toLocaleString()} × ${WORKER_PAYLOAD_BYTES} B sum, c=${concurrency}`,
       )
 
       await runPayloadDrainMatrix({
@@ -34,6 +37,7 @@ export const runWorkerWorkBench = async (): Promise<void> => {
         jobCount,
         body: sumBytes,
         label: 'payload-work',
+        mode,
       })
     }
   }

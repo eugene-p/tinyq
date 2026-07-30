@@ -140,7 +140,7 @@ const EVENT_SLOT: Record<string, keyof QueueSubs> = {
 /**
  * In-memory FIFO queue.
  *
- * Two-stack storage (O(1) amortised enqueue/dequeue). Methods are closures so
+ * Head-indexed storage (O(1) amortised enqueue/dequeue). Methods are closures so
  * {@link import('./forward.util').decorateQueue} can prototype-delegate without
  * rebinding `this`. The event emitter is created on the first {@link Queue.on};
  * until then mutators use a branch-free bare path (no event counters).
@@ -162,28 +162,27 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
         name = trimmed
     }
 
-    // Two-stack FIFO: O(1) amortised enqueue/dequeue without splice shifting.
-    let inbox: T[] = []
-    let outbox: T[] = []
-    let count = 0
+    // Head-indexed FIFO: avoids the full-array reverse required by two stacks.
+    // Dequeued slots are cleared immediately so a long-lived queue does not
+    // retain processed payloads.
+    let items: T[] = []
+    let head = 0
 
     // Lazy events: no emitter until the first subscriber; mutators start bare.
     let emitter: EventEmitter<QueueEvents<T>> | undefined
     let subs: QueueSubs | undefined
 
-    /** Move inbox → outbox (reversed). Reuses the empty outbox as the new inbox. */
-    const flipInboxToOutbox = (): void => {
-        const empty = outbox
-        outbox = inbox
-        outbox.reverse()
-        inbox = empty
-    }
-
-    /** Assumes `count > 0`. */
+    /** Assumes the queue is non-empty. */
     const removeHead = (): T => {
-        if (outbox.length === 0) flipInboxToOutbox()
-        count -= 1
-        return outbox.pop() as T
+        const value = items[head] as T
+        items[head] = undefined as T
+        head += 1
+        if (head === items.length) {
+            // Drop all payload references and make the next producer batch packed.
+            items = []
+            head = 0
+        }
+        return value
     }
 
     // --- bare mutators (no event branches) ---
@@ -191,47 +190,47 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
     const enqueueBare: (item: T) => void =
         maxSize === undefined
             ? (item: T): void => {
-                  inbox.push(item)
-                  count += 1
+                  items.push(item)
               }
             : (item: T): void => {
-                  if (count >= maxSize) {
+                  if (items.length - head >= maxSize) {
                       throw new QueueFullError(maxSize)
                   }
-                  inbox.push(item)
-                  count += 1
+                  items.push(item)
               }
 
     const takeToBare = (out: { value: T }): boolean => {
-        if (count === 0) return false
+        if (head === items.length) return false
         out.value = removeHead()
         return true
     }
 
     const dequeueBare = (): T | undefined => {
-        if (count === 0) return undefined
+        if (head === items.length) return undefined
         return removeHead()
     }
 
     const tryDequeueBare = (): QueueSlot<T> | undefined => {
-        if (count === 0) return undefined
+        if (head === items.length) return undefined
         return { value: removeHead() }
     }
 
     const clearBare = (): void => {
-        if (count === 0) return
-        inbox.length = 0
-        outbox.length = 0
-        count = 0
+        if (head === items.length) return
+        items = []
+        head = 0
     }
 
     // --- event-aware mutators (installed on first `on`) ---
 
     const emitAfterDequeue = (value: T): void => {
         if (subs!.dequeued > 0) {
-            emitter!.emit('queue:dequeued', { item: value, size: count })
+            emitter!.emit('queue:dequeued', {
+                item: value,
+                size: items.length - head,
+            })
         }
-        if (count === 0 && subs!.emptied > 0) {
+        if (head === items.length && subs!.emptied > 0) {
             emitter!.emit('queue:emptied', undefined)
         }
     }
@@ -239,25 +238,29 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
     const enqueueLoud: (item: T) => void =
         maxSize === undefined
             ? (item: T): void => {
-                  inbox.push(item)
-                  count += 1
+                  items.push(item)
                   if (subs!.enqueued > 0) {
-                      emitter!.emit('queue:enqueued', { item, size: count })
+                      emitter!.emit('queue:enqueued', {
+                          item,
+                          size: items.length - head,
+                      })
                   }
               }
             : (item: T): void => {
-                  if (count >= maxSize) {
+                  if (items.length - head >= maxSize) {
                       throw new QueueFullError(maxSize)
                   }
-                  inbox.push(item)
-                  count += 1
+                  items.push(item)
                   if (subs!.enqueued > 0) {
-                      emitter!.emit('queue:enqueued', { item, size: count })
+                      emitter!.emit('queue:enqueued', {
+                          item,
+                          size: items.length - head,
+                      })
                   }
               }
 
     const takeToLoud = (out: { value: T }): boolean => {
-        if (count === 0) return false
+        if (head === items.length) return false
         const value = removeHead()
         out.value = value
         emitAfterDequeue(value)
@@ -265,69 +268,53 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
     }
 
     const dequeueLoud = (): T | undefined => {
-        if (count === 0) return undefined
+        if (head === items.length) return undefined
         const value = removeHead()
         emitAfterDequeue(value)
         return value
     }
 
     const tryDequeueLoud = (): QueueSlot<T> | undefined => {
-        if (count === 0) return undefined
+        if (head === items.length) return undefined
         const value = removeHead()
         emitAfterDequeue(value)
         return { value }
     }
 
     const clearLoud = (): void => {
-        if (count === 0) return
-        const removed = count
-        inbox.length = 0
-        outbox.length = 0
-        count = 0
+        if (head === items.length) return
+        const removed = items.length - head
+        items = []
+        head = 0
         if (subs!.cleared > 0) {
             emitter!.emit('queue:cleared', { removed })
         }
     }
 
     const tryPeek = (): QueueSlot<T> | undefined => {
-        if (count === 0) return undefined
-        const value =
-            outbox.length > 0 ? outbox[outbox.length - 1]! : inbox[0]!
-        return { value }
+        if (head === items.length) return undefined
+        return { value: items[head]! }
     }
 
     const peek = (): T | undefined => {
-        if (count === 0) return undefined
-        return outbox.length > 0 ? outbox[outbox.length - 1]! : inbox[0]!
+        if (head === items.length) return undefined
+        return items[head]
     }
 
-    const size = (): number => count
+    const size = (): number => items.length - head
 
-    const isEmpty = (): boolean => count === 0
+    const isEmpty = (): boolean => head === items.length
 
     const replaceAll = (next: readonly T[]): void => {
         if (maxSize !== undefined && next.length > maxSize) {
             throw new QueueFullError(maxSize)
         }
-        inbox = next.length === 0 ? [] : next.slice()
-        outbox.length = 0
-        count = next.length
+        items = next.length === 0 ? [] : next.slice()
+        head = 0
     }
 
     const toArray = (): T[] => {
-        const outLen = outbox.length
-        const inLen = inbox.length
-        if (outLen === 0) {
-            return inLen === 0 ? [] : inbox.slice()
-        }
-        const result = new Array<T>(outLen + inLen)
-        for (let i = 0; i < outLen; i += 1) {
-            result[i] = outbox[outLen - 1 - i]!
-        }
-        for (let i = 0; i < inLen; i += 1) {
-            result[outLen + i] = inbox[i]!
-        }
-        return result
+        return head === items.length ? [] : items.slice(head)
     }
 
     // Built before `on`/`emit` so first-subscribe can swap bare mutators in place.

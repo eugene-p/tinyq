@@ -2,9 +2,12 @@ import { buildQueue, withWorker } from '@qkitt/tinyq'
 import { queue as asyncQueue } from 'async'
 import fastq from 'fastq'
 import PQueue from 'p-queue'
-import { Bench } from 'tinybench'
-import { printTimingTable } from './helpers.js'
-import { measureAllIsolated } from './mem/spawn.js'
+import {
+  type BenchMode,
+  isFullBenchMode,
+  printTimingTable,
+  runTimingTasks,
+} from './helpers.js'
 
 const DRAIN_TIMEOUT_MS = 120_000
 
@@ -22,12 +25,11 @@ const drainQkitt = (
       resolve()
       return
     }
-    let finished = 0
     let settled = false
     const timer = setTimeout(() => {
       finish(
         new Error(
-          `${label} timed out (n=${n}, c=${concurrency}, finished=${finished})`,
+          `${label} timed out (n=${n}, c=${concurrency})`,
         ),
       )
     }, DRAIN_TIMEOUT_MS)
@@ -43,16 +45,11 @@ const drainQkitt = (
 
     const q = withWorker(
       buildQueue<Uint8Array>(),
-      async (item) => {
-        try {
-          body(item)
-        } finally {
-          finished += 1
-          if (finished === n) finish()
-        }
-      },
+      async (item) => body(item),
       { concurrency },
     )
+    // worker:idle fires after all worker promises settle and the queue empties.
+    q.on('worker:idle', () => finish())
     q.on('worker:pump-error', ({ error }) => finish(error))
     for (let i = 0; i < n; i += 1) q.enqueue(jobs[i]!)
   })
@@ -131,37 +128,22 @@ export const runPayloadDrainMatrix = async (options: {
   jobCount: number
   body: Body
   label: string
-  /** When set, include retained heap for N×payloadBytes jobs. */
-  memoryPayloadBytes?: number
+  mode: BenchMode
 }): Promise<void> => {
-  const { jobs, concurrency, jobCount, body, label, memoryPayloadBytes } =
-    options
-  const bench = new Bench({ time: 800, warmupTime: 150 })
+  const { jobs, concurrency, jobCount, body, label, mode } = options
+  const tasks = [
+    {
+      name: '@qkitt/tinyq withWorker',
+      run: () => drainQkitt(jobs, concurrency, body, label),
+    },
+    { name: 'fastq', run: () => drainFastq(jobs, concurrency, body) },
+    { name: 'p-queue', run: () => drainPQueue(jobs, concurrency, body) },
+    { name: 'async.queue', run: () => drainAsyncQueue(jobs, concurrency, body) },
+  ]
+  const rows = await runTimingTasks(
+    isFullBenchMode(mode) ? tasks : [tasks[0]!, tasks[3]!],
+    mode,
+  )
 
-  bench
-    .add('@qkitt/tinyq withWorker', async () => {
-      await drainQkitt(jobs, concurrency, body, label)
-    })
-    .add('fastq', async () => {
-      await drainFastq(jobs, concurrency, body)
-    })
-    .add('p-queue', async () => {
-      await drainPQueue(jobs, concurrency, body)
-    })
-    .add('async.queue', async () => {
-      await drainAsyncQueue(jobs, concurrency, body)
-    })
-
-  await bench.run()
-
-  const memory =
-    memoryPayloadBytes !== undefined
-      ? await measureAllIsolated({
-          jobs: jobCount,
-          payloadBytes: memoryPayloadBytes,
-          concurrency,
-        })
-      : undefined
-
-  printTimingTable(bench, { jobCount, memory })
+  printTimingTable(rows, { jobCount })
 }

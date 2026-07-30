@@ -2,17 +2,17 @@ import { buildQueue, withWorker } from '@qkitt/tinyq'
 import { queue as asyncQueue } from 'async'
 import fastq from 'fastq'
 import PQueue from 'p-queue'
-import { Bench } from 'tinybench'
 import {
+  type BenchMode,
+  isFullBenchMode,
   printHeader,
   printTimingTable,
+  runTimingTasks,
   WORKER_RAW_CONCURRENCIES,
   WORKER_RAW_JOB_COUNTS,
-  WORKER_RAW_MEM_JOBS,
 } from './helpers.js'
-import { measureAllIsolated } from './mem/spawn.js'
 
-/** 2) workers raw — number jobs, empty body */
+/** 1) workers raw — number jobs, async no-op body */
 
 const DRAIN_TIMEOUT_MS = 60_000
 
@@ -22,12 +22,11 @@ const drainQkitt = (n: number, concurrency: number): Promise<void> =>
       resolve()
       return
     }
-    let finished = 0
     let settled = false
     const timer = setTimeout(() => {
       finish(
         new Error(
-          `worker-raw timed out (n=${n}, c=${concurrency}, finished=${finished})`,
+          `worker-raw timed out (n=${n}, c=${concurrency})`,
         ),
       )
     }, DRAIN_TIMEOUT_MS)
@@ -43,12 +42,11 @@ const drainQkitt = (n: number, concurrency: number): Promise<void> =>
 
     const q = withWorker(
       buildQueue<number>(),
-      async () => {
-        finished += 1
-        if (finished === n) finish()
-      },
+      async () => {},
       { concurrency },
     )
+    // worker:idle fires after all worker promises settle and the queue empties.
+    q.on('worker:idle', () => finish())
     q.on('worker:pump-error', ({ error }) => finish(error))
     for (let i = 0; i < n; i++) q.enqueue(i)
   })
@@ -94,43 +92,26 @@ const drainAsyncQueue = (n: number, concurrency: number): Promise<void> =>
     }
   })
 
-export const runWorkerRawBench = async (): Promise<void> => {
-  for (const concurrency of WORKER_RAW_CONCURRENCIES) {
-    // One empty-job mem sample per concurrency (large N → stable marginal B/item).
-    const memBase = await measureAllIsolated({
-      jobs: WORKER_RAW_MEM_JOBS,
-      payloadBytes: 0,
-      concurrency,
-    })
+export const runWorkerRawBench = async (mode: BenchMode): Promise<void> => {
+  const jobCounts = isFullBenchMode(mode) ? WORKER_RAW_JOB_COUNTS : [20_000]
 
-    for (const jobCount of WORKER_RAW_JOB_COUNTS) {
+  for (const concurrency of WORKER_RAW_CONCURRENCIES) {
+    for (const jobCount of jobCounts) {
       printHeader(
-        `2) workers raw — empty body × ${jobCount.toLocaleString()}, c=${concurrency}`,
+        `1) workers raw — async no-op × ${jobCount.toLocaleString()}, c=${concurrency}`,
       )
 
-      const bench = new Bench({ time: 800, warmupTime: 150 })
-      bench
-        .add('@qkitt/tinyq withWorker', async () => {
-          await drainQkitt(jobCount, concurrency)
-        })
-        .add('fastq', async () => {
-          await drainFastq(jobCount, concurrency)
-        })
-        .add('p-queue', async () => {
-          await drainPQueue(jobCount, concurrency)
-        })
-        .add('async.queue', async () => {
-          await drainAsyncQueue(jobCount, concurrency)
-        })
-
-      await bench.run()
-
-      const memory = memBase.map((row) => ({
-        name: row.name,
-        heapPerItem: row.heapPerItem,
-        heapDelta: row.heapPerItem * jobCount,
-      }))
-      printTimingTable(bench, { jobCount, memory })
+      const tasks = [
+        { name: '@qkitt/tinyq withWorker', run: () => drainQkitt(jobCount, concurrency) },
+        { name: 'fastq', run: () => drainFastq(jobCount, concurrency) },
+        { name: 'p-queue', run: () => drainPQueue(jobCount, concurrency) },
+        { name: 'async.queue', run: () => drainAsyncQueue(jobCount, concurrency) },
+      ]
+      const rows = await runTimingTasks(
+        isFullBenchMode(mode) ? tasks : [tasks[0]!, tasks[3]!],
+        mode,
+      )
+      printTimingTable(rows, { jobCount })
     }
   }
 }

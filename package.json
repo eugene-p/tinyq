@@ -10,6 +10,8 @@
     "test": "npm run test -w @qkitt/tinyq",
     "typecheck": "npm run typecheck -w @qkitt/tinyq",
     "bench": "npm run build:tinyq && npm run bench -w @qkitt/tinyq-bench",
+    "bench:full": "npm run build:tinyq && npm run bench:full -w @qkitt/tinyq-bench",
+    "bench:mem": "npm run build:tinyq && npm run bench:mem -w @qkitt/tinyq-bench",
     "bench:fifo": "npm run build:tinyq && npm run bench:fifo -w @qkitt/tinyq-bench",
     "bench:worker": "npm run build:tinyq && npm run bench:worker -w @qkitt/tinyq-bench",
     "bench:worker-payload": "npm run build:tinyq && npm run bench:worker-payload -w @qkitt/tinyq-bench",
