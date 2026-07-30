@@ -124,6 +124,25 @@ describe('pipelineWorker', () => {
         ])
     })
 
+    it('reuses the same ctx object across jobs for a given step', async () => {
+        const seen: object[] = []
+        const worker = pipelineWorker([
+            {
+                name: 'load',
+                metadata: { table: 'users' },
+                fn: async (id: number, ctx) => {
+                    seen.push(ctx)
+                    return id
+                },
+            },
+        ])
+
+        await worker(1)
+        await worker(2)
+        expect(seen).toHaveLength(2)
+        expect(seen[0]).toBe(seen[1])
+    })
+
     it('wraps named-step failures with name and metadata', async () => {
         const later = vi.fn(async (n: number) => n)
         const cause = new Error('boom')

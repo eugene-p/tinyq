@@ -1,6 +1,7 @@
 /**
- * Non-enumerable logical name brand on queues built with `buildQueue({ name })`.
- * Survives `decorateQueue` via the prototype chain (same pattern as maxSize).
+ * Logical name brand on queues built with `buildQueue({ name })`.
+ * Survives `decorateQueue` via the prototype chain.
+ * Symbol keys are already omitted from `Object.keys` / `for…in`.
  */
 
 const QUEUE_NAME = Symbol.for('tq:queue-name')
@@ -11,12 +12,7 @@ export const markQueueName = <T extends object>(
     name: string | undefined,
 ): T => {
     if (name === undefined) return queue
-    Object.defineProperty(queue, QUEUE_NAME, {
-        value: name,
-        enumerable: false,
-        configurable: false,
-        writable: false,
-    })
+    ;(queue as Record<symbol, unknown>)[QUEUE_NAME] = name
     return queue
 }
 

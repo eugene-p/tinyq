@@ -171,10 +171,12 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
     let emitter: EventEmitter<QueueEvents<T>> | undefined
     let subs: QueueSubs | undefined
 
+    /** Move inbox → outbox (reversed). Reuses the empty outbox as the new inbox. */
     const flipInboxToOutbox = (): void => {
+        const empty = outbox
         outbox = inbox
         outbox.reverse()
-        inbox = []
+        inbox = empty
     }
 
     /** Assumes `count > 0`. */
@@ -218,8 +220,8 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
 
     const clearBare = (): void => {
         if (count === 0) return
-        inbox = []
-        outbox = []
+        inbox.length = 0
+        outbox.length = 0
         count = 0
     }
 
@@ -279,8 +281,8 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
     const clearLoud = (): void => {
         if (count === 0) return
         const removed = count
-        inbox = []
-        outbox = []
+        inbox.length = 0
+        outbox.length = 0
         count = 0
         if (subs!.cleared > 0) {
             emitter!.emit('queue:cleared', { removed })
@@ -308,7 +310,7 @@ export const buildQueue = <T>(options: BuildQueueOptions = {}): Queue<T> => {
             throw new QueueFullError(maxSize)
         }
         inbox = next.length === 0 ? [] : next.slice()
-        outbox = []
+        outbox.length = 0
         count = next.length
     }
 

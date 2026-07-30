@@ -155,7 +155,7 @@ export const withWorker = <
     const finishItem = (): void => {
         active -= 1
 
-        if (active === 0 && inner.isEmpty() && subs.idle > 0) {
+        if (subs.idle > 0 && active === 0 && inner.isEmpty()) {
             emitInner('worker:idle', undefined)
         }
 
@@ -232,6 +232,7 @@ export const withWorker = <
                 // takeTo: one emptiness check; nullish payloads remain valid.
                 if (!takeTo(takeOut)) break
                 const item = takeOut.value
+                takeOut.value = undefined as unknown as T
                 active += 1
                 processItem(item)
             }

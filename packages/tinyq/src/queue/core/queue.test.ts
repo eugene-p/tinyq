@@ -18,6 +18,23 @@ describe('buildQueue', () => {
         expect(queue.isEmpty()).toBe(true)
     })
 
+    it('preserves FIFO after many outbox flips (inbox reuse)', () => {
+        const queue = buildQueue<number>()
+        const n = 50
+        for (let i = 0; i < n; i += 1) queue.enqueue(i)
+        for (let i = 0; i < n; i += 1) {
+            expect(queue.dequeue()).toBe(i)
+            // Force flip cycles: enqueue while draining
+            if (i % 3 === 0) queue.enqueue(n + i)
+        }
+        const rest: number[] = []
+        while (!queue.isEmpty()) rest.push(queue.dequeue() as number)
+        // Remaining items are those re-enqueued during drain, in enqueue order.
+        expect(rest).toEqual(
+            Array.from({ length: Math.floor((n - 1) / 3) + 1 }, (_, k) => n + k * 3),
+        )
+    })
+
     it('peek returns the head without removing it', () => {
         const queue = buildQueue<string>()
 

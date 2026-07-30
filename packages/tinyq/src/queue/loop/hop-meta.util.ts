@@ -29,16 +29,32 @@ export const getLoopHops = (
     return typeof hops === 'number' && Number.isFinite(hops) ? hops : undefined
 }
 
-/** Shallow structural compare for reserved meta bags (JSON-safe values). */
+/**
+ * Structural compare for reserved meta bags (plain objects + leaf primitives).
+ * Walks own keys without `JSON.stringify` (hot path on every loop failure).
+ */
 export const queueMetaEqual = (a: unknown, b: unknown): boolean => {
     if (a === b) return true
     if (a === undefined || b === undefined) return a === b
     if (!isPlainObject(a) || !isPlainObject(b)) return false
-    try {
-        return JSON.stringify(a) === JSON.stringify(b)
-    } catch {
-        return false
+
+    const aKeys = Object.keys(a)
+    const bKeys = Object.keys(b)
+    if (aKeys.length !== bKeys.length) return false
+
+    for (let i = 0; i < aKeys.length; i += 1) {
+        const key = aKeys[i]!
+        if (!Object.prototype.hasOwnProperty.call(b, key)) return false
+        const av = a[key]
+        const bv = b[key]
+        if (av === bv) continue
+        if (isPlainObject(av) && isPlainObject(bv)) {
+            if (!queueMetaEqual(av, bv)) return false
+            continue
+        }
+        if (av !== bv) return false
     }
+    return true
 }
 
 /**
@@ -93,10 +109,11 @@ export const stampLoopHops = <T>(
         }
     }
 
-    const next: Record<string, unknown> = { ...mapped }
-    delete next[TQ_KEY]
-    next[TQ_KEY] = libraryRoot
-    return next
+    // Overwrite only — avoid `delete` (keeps a fast V8 object shape).
+    return {
+        ...mapped,
+        [TQ_KEY]: libraryRoot,
+    }
 }
 
 /** Own-property reserved bag on a plain mapped result, if any. */

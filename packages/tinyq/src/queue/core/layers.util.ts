@@ -1,6 +1,7 @@
 /**
  * Decorator layer brands for composition guards.
  * Uses `Symbol.for` so checks remain valid across duplicate package copies.
+ * Symbol keys are already omitted from `Object.keys` / `for…in`.
  */
 
 export const WORKER_LAYER = Symbol.for('tq:worker-layer')
@@ -12,18 +13,20 @@ type QueueLayerBrand =
     | typeof DLQ_LAYER
     | typeof LOOP_LAYER
 
-/** Non-enumerable brand on a queue decorator object (idempotent). */
+/** Known brands to copy across decorator wrappers. */
+const QUEUE_LAYERS: readonly QueueLayerBrand[] = [
+    WORKER_LAYER,
+    DLQ_LAYER,
+    LOOP_LAYER,
+]
+
+/** Brand a queue decorator object (idempotent). */
 export const markQueueLayer = <T extends object>(
     queue: T,
     layer: QueueLayerBrand,
 ): T => {
     if (hasQueueLayer(queue, layer)) return queue
-    Object.defineProperty(queue, layer, {
-        value: true,
-        enumerable: false,
-        configurable: false,
-        writable: false,
-    })
+    ;(queue as Record<symbol, unknown>)[layer] = true
     return queue
 }
 
@@ -37,14 +40,9 @@ export const copyQueueLayers = <T extends object>(
     from: object,
     to: T,
 ): T => {
-    if (hasQueueLayer(from, WORKER_LAYER)) {
-        markQueueLayer(to, WORKER_LAYER)
-    }
-    if (hasQueueLayer(from, DLQ_LAYER)) {
-        markQueueLayer(to, DLQ_LAYER)
-    }
-    if (hasQueueLayer(from, LOOP_LAYER)) {
-        markQueueLayer(to, LOOP_LAYER)
+    for (let i = 0; i < QUEUE_LAYERS.length; i += 1) {
+        const layer = QUEUE_LAYERS[i]!
+        if (hasQueueLayer(from, layer)) markQueueLayer(to, layer)
     }
     return to
 }

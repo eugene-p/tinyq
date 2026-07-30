@@ -261,11 +261,16 @@ export const withLoop = <
             }
 
             if (wait > 0) {
+                // Timer callbacks must never throw (unhandled async errors).
                 scheduleTimeout(() => {
                     try {
                         reEnqueue()
                     } catch (cause) {
-                        emitLoopError(item, error, cause)
+                        try {
+                            emitLoopError(item, error, cause)
+                        } catch {
+                            // Last resort: isolate emit failures from the timer.
+                        }
                     }
                 }, wait)
                 return

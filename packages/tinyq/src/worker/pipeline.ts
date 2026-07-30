@@ -28,6 +28,8 @@ type NormalizedStep = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     fn: StepFn<any, any>
     metadata: unknown
+    /** Built once at construction — reused for every job. */
+    ctx: PipelineStepContext
 }
 
 /** Thrown when pipeline construction or step shape is invalid. */
@@ -46,10 +48,13 @@ const isStepObject = (step: unknown): step is PipelineStepObject =>
 
 const normalizeStep = (step: PipelineStep, index: number): NormalizedStep => {
     if (typeof step === 'function') {
+        const name = `step[${index}]`
+        const metadata = undefined
         return {
-            name: `step[${index}]`,
+            name,
             fn: step,
-            metadata: undefined,
+            metadata,
+            ctx: { name, index, metadata },
         }
     }
 
@@ -59,10 +64,13 @@ const normalizeStep = (step: PipelineStep, index: number): NormalizedStep => {
                 `pipeline step at index ${index} requires a non-empty name`,
             )
         }
+        const name = step.name
+        const metadata = step.metadata
         return {
-            name: step.name,
+            name,
             fn: step.fn,
-            metadata: step.metadata,
+            metadata,
+            ctx: { name, index, metadata },
         }
     }
 
@@ -108,8 +116,7 @@ export const pipelineDone = <T>(value: T): PipelineDone<T> => ({
 const isPipelineDone = (value: unknown): value is PipelineDone =>
     typeof value === 'object' &&
     value !== null &&
-    (value as PipelineDone)[PIPELINE_DONE] === true &&
-    'value' in (value as object)
+    (value as PipelineDone)[PIPELINE_DONE] === true
 
 /** Thrown when a pipeline step rejects or throws. */
 export class PipelineStepError extends Error {
@@ -175,13 +182,8 @@ export function pipelineWorker<T, R = unknown>(
         let value: any = input
         for (let i = 0; i < normalized.length; i += 1) {
             const step = normalized[i]!
-            const ctx: PipelineStepContext = {
-                name: step.name,
-                index: i,
-                metadata: step.metadata,
-            }
             try {
-                value = await step.fn(value, ctx)
+                value = await step.fn(value, step.ctx)
             } catch (error) {
                 throw new PipelineStepError(
                     step.name,

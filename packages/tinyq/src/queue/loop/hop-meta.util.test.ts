@@ -103,6 +103,26 @@ describe('queueMetaEqual', () => {
             ),
         ).toBe(false)
     })
+
+    it('is key-order independent at each level', () => {
+        expect(
+            queueMetaEqual(
+                { a: 1, b: { x: 2, y: 3 } },
+                { b: { y: 3, x: 2 }, a: 1 },
+            ),
+        ).toBe(true)
+    })
+
+    it('rejects extra or missing keys', () => {
+        expect(queueMetaEqual({ a: 1 }, { a: 1, b: 2 })).toBe(false)
+        expect(queueMetaEqual({ a: 1, b: 2 }, { a: 1 })).toBe(false)
+    })
+
+    it('rejects non-plain objects', () => {
+        expect(queueMetaEqual([1], [1])).toBe(false)
+        expect(queueMetaEqual({ a: 1 }, null)).toBe(false)
+        expect(queueMetaEqual(1, 1)).toBe(true) // reference/primitive identity via ===
+    })
 })
 
 describe('buildLoopQueueMeta', () => {

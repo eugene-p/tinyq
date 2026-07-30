@@ -570,4 +570,34 @@ describe('withLoop', () => {
             vi.useRealTimers()
         }
     })
+
+    it('does not throw from delayed re-enqueue when loop:error listener throws', async () => {
+        vi.useFakeTimers()
+        try {
+            const queue = withLoop(
+                withWorker(named<number>('jobs'), async () => {
+                    throw new Error('worker')
+                }),
+                {
+                    delay: 10,
+                    map: () => {
+                        throw new Error('map-late')
+                    },
+                },
+            )
+            queue.on('loop:error', () => {
+                throw new Error('listener-boom')
+            })
+
+            queue.enqueue(1)
+            await vi.advanceTimersByTimeAsync(0)
+            await flush(2)
+
+            // Timer callback must complete without an unhandled throw.
+            await vi.advanceTimersByTimeAsync(10)
+            await flush(2)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
 })
