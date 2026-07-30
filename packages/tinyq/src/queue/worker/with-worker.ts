@@ -28,6 +28,11 @@ export type WorkerEvents<T, R = unknown> = {
     'worker:completed': { item: T; result: R }
     /** Fired when the worker throws or rejects. */
     'worker:failed': { item: T; error: unknown }
+    /**
+     * Fired after an async item settles (success or failure). No payload.
+     * Checked at settle time so late subscribers (e.g. `gracefulStop`) still wake.
+     */
+    'worker:settled': undefined
     /** Fired when nothing is in-flight and the queue is empty. */
     'worker:idle': undefined
     /**
@@ -108,6 +113,14 @@ const isThenable = (value: unknown): value is PromiseLike<unknown> =>
  *
  * Mutators are read live off `inner` so bare→event method swaps on first
  * `queue.on` still apply under the worker.
+ *
+ * ## Sync vs async `active` tracking
+ *
+ * `active` counts items whose worker call has not yet settled (i.e. async
+ * in-flight work). Sync items complete inside the pump loop iteration so they
+ * never increment `active` — the loop itself serialises them and `active` is
+ * always 0 for pure-sync workers. This keeps `isProcessing()` semantically
+ * correct: nothing is in flight between loop iterations.
  */
 export const withWorker = <
     T,
@@ -138,6 +151,7 @@ export const withWorker = <
         started: 'worker:started',
         completed: 'worker:completed',
         failed: 'worker:failed',
+        settled: 'worker:settled',
         idle: 'worker:idle',
         pumpError: 'worker:pump-error',
     })
@@ -148,73 +162,27 @@ export const withWorker = <
     >['on']
 
     let running = false
+    /** Counts async-only in-flight items. Sync items complete within the loop iteration. */
     let active = 0
-    /** Prevents nested pump when a sync worker finishes inside the pump loop. */
     let pumping = false
 
-    const finishItem = (): void => {
+    /**
+     * Called when an async item's thenable settles (both fulfilled and rejected
+     * paths when no completed/failed listeners are subscribed).
+     * Stable function reference — avoids two closure allocations per async item
+     * on the no-listener fast path.
+     *
+     * `worker:settled` / re-pump are decided at settle time so late subscribers
+     * (e.g. `gracefulStop`) still observe completion.
+     */
+    const finishAsync = (): void => {
         active -= 1
-
-        if (subs.idle > 0 && active === 0 && inner.isEmpty()) {
-            emitInner('worker:idle', undefined)
+        if (subs.settled > 0) {
+            emitInner('worker:settled', undefined)
         }
-
-        // Sync completions re-enter the open `while` via `active--` only.
-        // Async completions need an explicit pump after the microtask.
         if (!pumping) {
             pump()
         }
-    }
-
-    const processItem = (item: T): void => {
-        if (subs.started > 0) {
-            emitInner('worker:started', { item })
-        }
-
-        let ret: R | PromiseLike<R>
-        try {
-            ret = worker(item)
-        } catch (error) {
-            if (subs.failed > 0) {
-                emitInner('worker:failed', { item, error })
-            }
-            finishItem()
-            return
-        }
-
-        if (isThenable(ret)) {
-            // Direct thenable hop — no `Promise.resolve` wrapper allocation.
-            try {
-                ret.then(
-                    (result) => {
-                        if (subs.completed > 0) {
-                            emitInner('worker:completed', {
-                                item,
-                                result: result as R,
-                            })
-                        }
-                        finishItem()
-                    },
-                    (error: unknown) => {
-                        if (subs.failed > 0) {
-                            emitInner('worker:failed', { item, error })
-                        }
-                        finishItem()
-                    },
-                )
-            } catch (error) {
-                if (subs.failed > 0) {
-                    emitInner('worker:failed', { item, error })
-                }
-                finishItem()
-            }
-            return
-        }
-
-        if (subs.completed > 0) {
-            emitInner('worker:completed', { item, result: ret })
-        }
-        finishItem()
     }
 
     const stop = (): void => {
@@ -232,9 +200,74 @@ export const withWorker = <
                 // takeTo: one emptiness check; nullish payloads remain valid.
                 if (!takeTo(takeOut)) break
                 const item = takeOut.value
+                // Drop the slot reference immediately so payloads are not
+                // retained by takeOut across the worker call.
                 takeOut.value = undefined as unknown as T
-                active += 1
-                processItem(item)
+
+                if (subs.started > 0) {
+                    emitInner('worker:started', { item })
+                }
+
+                let ret: R | PromiseLike<R>
+                try {
+                    ret = worker(item)
+                } catch (error) {
+                    // Sync throw: item is done, no active change needed.
+                    if (subs.failed > 0) {
+                        emitInner('worker:failed', { item, error })
+                    }
+                    continue
+                }
+
+                if (isThenable(ret)) {
+                    // Async item: track as in-flight so concurrency + isProcessing stay correct.
+                    active += 1
+                    try {
+                        if (subs.completed === 0 && subs.failed === 0) {
+                            // Fast path — no completed/failed listeners: reuse the stable
+                            // `finishAsync` ref so the engine allocates no new closures.
+                            // (worker:settled is handled inside finishAsync at settle time.)
+                            ret.then(
+                                finishAsync as (value: unknown) => void,
+                                finishAsync,
+                            )
+                        } else {
+                            // Slow path — at least one payload event listener: closures over
+                            // `item` are required to build the event object.
+                            ret.then(
+                                (result) => {
+                                    if (subs.completed > 0) {
+                                        emitInner('worker:completed', {
+                                            item,
+                                            result: result as R,
+                                        })
+                                    }
+                                    finishAsync()
+                                },
+                                (error: unknown) => {
+                                    if (subs.failed > 0) {
+                                        emitInner('worker:failed', {
+                                            item,
+                                            error,
+                                        })
+                                    }
+                                    finishAsync()
+                                },
+                            )
+                        }
+                    } catch (error) {
+                        // Broken thenable: .then() itself threw.
+                        if (subs.failed > 0) {
+                            emitInner('worker:failed', { item, error })
+                        }
+                        finishAsync()
+                    }
+                } else {
+                    // Sync success: item is complete, no active change needed.
+                    if (subs.completed > 0) {
+                        emitInner('worker:completed', { item, result: ret })
+                    }
+                }
             }
         } catch (error) {
             // Unexpected dequeue failure: surface and stop so it is not silent.
@@ -244,6 +277,10 @@ export const withWorker = <
             stop()
         } finally {
             pumping = false
+        }
+        // Single idle checkpoint after the drain turn (sync and async re-entry).
+        if (subs.idle > 0 && active === 0 && inner.isEmpty()) {
+            emitInner('worker:idle', undefined)
         }
     }
 

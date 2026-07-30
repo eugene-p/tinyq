@@ -10,10 +10,7 @@ import { resolveTimeoutMs } from './resolve-timeout-ms.util'
 export type GracefulStopable = {
     stop: () => void
     isProcessing: () => boolean
-    on: (
-        event: 'worker:completed' | 'worker:failed',
-        cb: () => void,
-    ) => () => void
+    on: (event: 'worker:settled', cb: () => void) => () => void
     flush?: () => void | PromiseLike<void>
 }
 
@@ -43,6 +40,10 @@ const runFlush = async (queue: GracefulStopable): Promise<void> => {
  * Unlike {@link import('./when-idle').whenIdle}, this does **not** require an
  * empty queue — remaining items stay queued (typical SIGTERM path).
  *
+ * Waits on `worker:settled` (emitted after each async item finishes, including
+ * the no-listener fast path) rather than `worker:completed` / `worker:failed`,
+ * so late subscription still observes in-flight work.
+ *
  * **Without `timeoutMs` the promise can hang forever** if in-flight work or an
  * opt-in `flush()` never settles. Prefer a budget so callers fail closed with
  * {@link LifecycleTimeoutError} (in-flight work is not cancelled — only the
@@ -60,14 +61,11 @@ export const gracefulStop = (
         /** Prevents concurrent completion waves from starting flush twice. */
         let settling = false
         let timer: unknown
-        let offCompleted: (() => void) | undefined
-        let offFailed: (() => void) | undefined
+        let offSettled: (() => void) | undefined
 
         const cleanup = (): void => {
-            offCompleted?.()
-            offFailed?.()
-            offCompleted = undefined
-            offFailed = undefined
+            offSettled?.()
+            offSettled = undefined
             if (timer !== undefined) {
                 cancelTimeout(timer)
                 timer = undefined
@@ -87,10 +85,8 @@ export const gracefulStop = (
 
             settling = true
             // Drop listeners as soon as settle starts (before await flush).
-            offCompleted?.()
-            offFailed?.()
-            offCompleted = undefined
-            offFailed = undefined
+            offSettled?.()
+            offSettled = undefined
 
             void (async () => {
                 try {
@@ -108,16 +104,15 @@ export const gracefulStop = (
             })()
         }
 
-        // completed/failed emit before active is decremented — check on a
-        // microtask so isProcessing() reflects the post-finish state.
+        // finishAsync decrements `active` then emits settled — microtask keeps
+        // settle() off the emit stack (flush / re-entrancy safety).
         const onItemDone = (): void => {
             scheduleMicrotask(settle)
         }
 
         queue.stop()
 
-        offCompleted = queue.on('worker:completed', onItemDone)
-        offFailed = queue.on('worker:failed', onItemDone)
+        offSettled = queue.on('worker:settled', onItemDone)
 
         if (timeoutMs !== undefined) {
             timer = scheduleTimeout(() => {

@@ -80,6 +80,7 @@ const queue = withWorker(buildQueue<Job>(), async (job) => run(job), {
 | `worker:started` | `{ item }` |
 | `worker:completed` | `{ item, result }` |
 | `worker:failed` | `{ item, error }` |
+| `worker:settled` | — (async item finished; no payload; used by `gracefulStop`) |
 | `worker:idle` | — (empty + nothing in flight) |
 | `worker:pump-error` | `{ error }` — unexpected dequeue failure; pump stops until `start()` |
 
