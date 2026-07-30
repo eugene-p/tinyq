@@ -54,6 +54,11 @@
       "import": "./dist/queue/index.js",
       "default": "./dist/queue/index.js"
     },
+    "./router": {
+      "types": "./dist/router/index.d.ts",
+      "import": "./dist/router/index.js",
+      "default": "./dist/router/index.js"
+    },
     "./worker": {
       "types": "./dist/worker/index.d.ts",
       "import": "./dist/worker/index.js",

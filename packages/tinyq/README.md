@@ -37,7 +37,7 @@ import {
 } from '@qkitt/tinyq'
 ```
 
-Subpath exports: `@qkitt/tinyq/queue`, `@qkitt/tinyq/worker`, `@qkitt/tinyq/events`.
+Subpath exports: `@qkitt/tinyq/queue`, `@qkitt/tinyq/router`, `@qkitt/tinyq/worker`, `@qkitt/tinyq/events`.
 
 ## Quick start
 
@@ -124,6 +124,23 @@ const queue = withDlq(
 )
 ```
 
+### Topic routing
+
+`buildTopicRouter` fans a published dotted topic out to queue-like `enqueue`
+targets. Patterns are exact, `*` (one segment), or trailing `#` (zero or more).
+
+```ts
+import { buildQueue, buildTopicRouter, type TopicMessage } from '@qkitt/tinyq'
+
+const orders = buildQueue<TopicMessage<{ id: string }>>()
+const audit = buildQueue<TopicMessage>()
+const topics = buildTopicRouter()
+
+topics.bind('orders.created', orders)
+topics.bind('orders.#', audit)
+topics.publish('orders.created', { id: 'o_1' })
+```
+
 ## Recipes
 
 | Task | How |
@@ -137,6 +154,7 @@ const queue = withDlq(
 | Failure sink | `withDlq(withWorker(...), sinkQueue)` |
 | Hop, then sink | `withLoop` then `withDlq` with complementary `filter`s |
 | Bounded backlog | `buildQueue({ maxSize })` — `enqueue` throws `QueueFullError` |
+| Topic fan-out | `buildTopicRouter()` → `bind(pattern, queue)` → `publish(topic, data)` |
 
 Runnable scenarios: [examples/](https://github.com/eugene-p/tinyq/tree/main/examples) in the monorepo.
 

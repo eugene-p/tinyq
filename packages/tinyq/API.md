@@ -215,6 +215,39 @@ Map / filter / sink `enqueue` failures emit `dlq:error` (do not rethrow). A full
 
 **Errors:** `InvalidDeadLetterOptionError`, `DeadLetterEnqueueError`, `InvalidQueueCompositionError`.
 
+### `buildTopicRouter(options?)`
+
+Route dotted topics into one or more queue-like targets. This is an in-process
+fan-out primitive: it only requires `target.enqueue({ topic, data })`, so a
+target can be a tinyq queue or another compatible destination.
+
+```ts
+const topics = buildTopicRouter()
+topics.bind('orders.*', ordersQueue)
+topics.bind('orders.#', auditQueue)
+topics.publish('orders.created', { id: 'o_1' })
+```
+
+Patterns are exact (`orders.created`), `*` for exactly one segment
+(`orders.*`), or trailing `#` for zero or more segments (`orders.#`).
+`publish` returns the number of matched bindings; a failing target is reported
+through `router:error` but does not prevent other matching targets receiving the message.
+
+| Method / option | Description |
+| --- | --- |
+| `bind(pattern, target)` | Add a binding; returns an unbind function for it. Invalid patterns throw `InvalidTopicPatternError`. |
+| `unbind(pattern, target?)` / `clear()` | Remove matching bindings / all bindings. |
+| `publish(topic, data)` | Fan out `{ topic, data }`. Invalid or wildcard-containing topics throw `InvalidTopicError`. |
+| `unmatchedTarget` | Optional target for publishes with no matching binding; it does not add to the matched count. |
+| `unmatchedCount()` / `lastUnmatched()` / `clearUnmatched()` | Inspect or reset unmatched-publish diagnostics. |
+
+| Event | Payload |
+| --- | --- |
+| `router:bound` / `router:unbound` / `router:cleared` | Binding change details. |
+| `router:published` | `{ topic, data, matched }` |
+| `router:unmatched` | `{ topic, data, delivered }` |
+| `router:error` | `{ operation, error, topic?, pattern? }` — bind validation or target enqueue failure. |
+
 ### Helpers
 
 | Export | Description |

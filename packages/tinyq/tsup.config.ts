@@ -8,6 +8,7 @@ export default defineConfig({
         index: 'src/index.ts',
         'events/index': 'src/events/index.ts',
         'queue/index': 'src/queue/index.ts',
+        'router/index': 'src/router/index.ts',
         'worker/index': 'src/worker/index.ts',
     },
     format: ['esm'],

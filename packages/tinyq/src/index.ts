@@ -52,6 +52,19 @@ export {
 export type { DelayPolicy } from './util/delay-policy.util'
 
 export {
+    buildTopicRouter,
+    InvalidTopicError,
+    InvalidTopicPatternError,
+    type BuildTopicRouterOptions,
+    type TopicBinding,
+    type TopicMessage,
+    type TopicRouter,
+    type TopicRouterEvents,
+    type TopicTarget,
+    type UnmatchedTopic,
+} from './router'
+
+export {
     InvalidPipelineError,
     InvalidRetryOptionError,
     pipelineWorker,
