@@ -1,4 +1,5 @@
 import { runFifoBench } from './fifo.js'
+import { runRouterBench } from './router.js'
 import { runWorkerRawBench } from './worker-raw.js'
 import { runWorkerPayloadBench } from './worker-payload.js'
 import { runWorkerWorkBench } from './worker-work.js'
@@ -14,7 +15,7 @@ const main = async (): Promise<void> => {
   console.log(dim(`Node ${process.version} · suite=${suite} · mode=${mode}`))
   console.log(
     dim(
-      '1 workers raw · 2 workers payload discard · 3 workers payload work · 4 fifo raw',
+      '1 workers raw · 2 workers payload discard · 3 workers payload work · 4 fifo raw · 5 topic router',
     ),
   )
 
@@ -40,11 +41,15 @@ const main = async (): Promise<void> => {
   if (runsAll || suite === 'fifo' || suite === '4') {
     await runFifoBench(mode)
   }
+  if (runsAll || suite === 'router' || suite === '5') {
+    await runRouterBench(mode)
+  }
 
   if (
     suite !== 'all' &&
     suite !== 'full' &&
     suite !== 'fifo' &&
+    suite !== 'router' &&
     suite !== 'worker' &&
     suite !== 'worker-payload' &&
     suite !== 'payload' &&
@@ -54,9 +59,10 @@ const main = async (): Promise<void> => {
     suite !== '2' &&
     suite !== '3' &&
     suite !== '4'
+    && suite !== '5'
   ) {
     console.error(
-      `Unknown suite "${suite}". Use: all | full | worker|1 | worker-payload|payload|2 | worker-work|work|3 | fifo|4`,
+      `Unknown suite "${suite}". Use: all | full | worker|1 | worker-payload|payload|2 | worker-work|work|3 | fifo|4 | router|5`,
     )
     process.exitCode = 1
   }

@@ -14,6 +14,7 @@ Suites run in worker-first order:
 | 2 | `bench:worker-payload` | **workers payload discard** — 1 KiB jobs, body ignores item |
 | 3 | `bench:worker-work` | **workers payload work** — 1 KiB jobs, body sums every byte |
 | 4 | `bench:fifo` | **fifo raw** — bare queue, numbers, enq/deq |
+| 5 | `bench:router` | **topic router** — exact and wildcard publish fan-out |
 
 ```bash
 npm run bench                 # 1→4
@@ -23,6 +24,7 @@ npm run bench:worker          # 1 only
 npm run bench:worker-payload  # 2 only
 npm run bench:worker-work     # 3 only
 npm run bench:fifo            # 4 only
+npm run bench:router          # 5 only
 ```
 
 | Layer | Peers |
@@ -39,6 +41,7 @@ npm run bench:fifo            # 4 only
 | 2 | `jobs/s`, latency, pass range | — |
 | 3 | `jobs/s`, latency, pass range | — |
 | 4 | `ops/s`, latency, pass range | — |
+| 5 | `publishes/s`, latency, pass range | — |
 
 Retained sample is `heapUsed + arrayBuffers`. `bench:mem` runs the representative raw c=1/c=4 and payload c=1 matrix; custom probes live under `src/mem/*` (`--jobs`, `--payload`, optional `--concurrency`).
 

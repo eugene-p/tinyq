@@ -80,5 +80,9 @@ describe('buildTopicRouter', () => {
             InvalidTopicPatternError,
         )
         expect(() => router.publish('orders.*', 1)).toThrow(InvalidTopicError)
+        expect(() => router.publish('orders..created', 1)).toThrow(
+            InvalidTopicError,
+        )
+        expect(() => router.publish('orders.', 1)).toThrow(InvalidTopicError)
     })
 })

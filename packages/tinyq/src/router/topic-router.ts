@@ -7,6 +7,7 @@ import {
 const TOPIC_SEPARATOR = '.'
 const SINGLE_WILDCARD = '*'
 const MULTI_WILDCARD = '#'
+const EMPTY_PARTS: readonly string[] = []
 
 /** A concrete topic and its published payload. */
 export type TopicMessage<T = unknown> = {
@@ -96,21 +97,25 @@ export type TopicRouter<TEvents extends EventMap = TopicRouterEvents> = {
 
 type InternalBinding = TopicBinding & {
     readonly patternParts: readonly string[]
+    readonly hasWildcard: boolean
 }
 
-const isValidTopicParts = (parts: readonly string[]): boolean => {
-    if (parts.length === 0) return false
-    for (let i = 0; i < parts.length; i += 1) {
-        const part = parts[i]!
-        if (
-            part.length === 0 ||
-            part.includes(SINGLE_WILDCARD) ||
-            part.includes(MULTI_WILDCARD)
-        ) {
-            return false
+/** Validate a concrete topic without allocating a split-parts array. */
+const isValidTopic = (topic: string): boolean => {
+    if (topic.length === 0) return false
+
+    let previousWasSeparator = true
+    for (let i = 0; i < topic.length; i += 1) {
+        const code = topic.charCodeAt(i)
+        if (code === 42 || code === 35) return false // * or #
+        if (code === 46) {
+            if (previousWasSeparator) return false
+            previousWasSeparator = true
+        } else {
+            previousWasSeparator = false
         }
     }
-    return true
+    return !previousWasSeparator
 }
 
 const isValidPattern = (pattern: string): boolean => {
@@ -217,9 +222,17 @@ export const buildTopicRouter = (
             throw error
         }
 
+        const hasWildcard =
+            pattern.includes(SINGLE_WILDCARD) ||
+            pattern.includes(MULTI_WILDCARD)
         routes.push({
             pattern,
-            patternParts: pattern.split(TOPIC_SEPARATOR),
+            hasWildcard,
+            // Exact bindings only compare the original topic string; keep one
+            // shared empty array rather than a split array per binding.
+            patternParts: hasWildcard
+                ? pattern.split(TOPIC_SEPARATOR)
+                : EMPTY_PARTS,
             target: target as TopicTarget,
         })
         routeVersion += 1
@@ -228,8 +241,7 @@ export const buildTopicRouter = (
     }
 
     const publish = <T = unknown>(topic: string, data: T): number => {
-        const topicParts = topic.split(TOPIC_SEPARATOR)
-        if (!isValidTopicParts(topicParts)) {
+        if (!isValidTopic(topic)) {
             const error = new InvalidTopicError(topic)
             emitter?.emit('router:error', {
                 operation: 'publish',
@@ -242,9 +254,28 @@ export const buildTopicRouter = (
         const message: TopicMessage<T> = { topic, data }
         let matched = 0
         const startVersion = routeVersion
+        // Created only if a wildcard binding is encountered. Exact-only
+        // routers stay string-to-string from validation through delivery.
+        let topicParts: string[] | undefined
 
-        const deliver = (route: InternalBinding): void => {
-            if (!matches(route.patternParts, topicParts)) return
+        // Avoid a snapshot allocation in normal operation, but finish safely
+        // if a target changes bindings re-entrantly while handling a publish.
+        let index = 0
+        for (; index < routes.length; index += 1) {
+            if (routeVersion !== startVersion) {
+                break
+            }
+            const route = routes[index]!
+            if (
+                route.hasWildcard
+                    ? !matches(
+                          route.patternParts,
+                          (topicParts ??= topic.split(TOPIC_SEPARATOR)),
+                      )
+                    : route.pattern !== topic
+            ) {
+                continue
+            }
             matched += 1
             try {
                 route.target.enqueue(message as TopicMessage)
@@ -258,14 +289,34 @@ export const buildTopicRouter = (
             }
         }
 
-        // Avoid a snapshot allocation in normal operation, but finish safely
-        // if a target changes bindings re-entrantly while handling a publish.
-        for (let i = 0; i < routes.length; i += 1) {
-            if (routeVersion !== startVersion) {
-                for (const route of routes.slice(i)) deliver(route)
-                break
+        // A re-entrant binding change is unusual; pay the snapshot cost only
+        // then. The ordinary route stays one loop with no per-publish closure.
+        if (index < routes.length) {
+            const remaining = routes.slice(index)
+            for (let i = 0; i < remaining.length; i += 1) {
+                const route = remaining[i]!
+                if (
+                    route.hasWildcard
+                        ? !matches(
+                              route.patternParts,
+                              (topicParts ??= topic.split(TOPIC_SEPARATOR)),
+                          )
+                        : route.pattern !== topic
+                ) {
+                    continue
+                }
+                matched += 1
+                try {
+                    route.target.enqueue(message as TopicMessage)
+                } catch (error) {
+                    emitter?.emit('router:error', {
+                        operation: 'publish',
+                        error,
+                        topic,
+                        pattern: route.pattern,
+                    })
+                }
             }
-            deliver(routes[i]!)
         }
 
         if (matched > 0) {

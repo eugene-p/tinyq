@@ -15,6 +15,7 @@
     "bench:worker": "tsx --expose-gc src/index.ts worker",
     "bench:worker-payload": "tsx --expose-gc src/index.ts worker-payload",
     "bench:worker-work": "tsx --expose-gc src/index.ts worker-work",
+    "bench:router": "tsx --expose-gc src/index.ts router",
     "bench:mem": "tsx --expose-gc src/mem/matrix.ts",
     "mem": "tsx --expose-gc src/mem/run-all.ts",
     "mem:tinyq": "tsx --expose-gc src/mem/tinyq.ts",
