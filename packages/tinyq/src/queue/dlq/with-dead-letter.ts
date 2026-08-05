@@ -1,4 +1,4 @@
-import type { EventCallback, EventMap, MergeEventMaps } from '../../events'
+import type { EventMap, MergeEventMaps } from '../../events'
 import { InvalidQueueCompositionError } from '../core/composition-error'
 import {
     decorateQueue,
@@ -11,6 +11,7 @@ import {
     WORKER_LAYER,
 } from '../core/layers.util'
 import type { QueueEvents } from '../core/queue'
+import { subscribeInternalFailed } from '../worker/internal-failed.util'
 import type { QueueWithWorker, WorkerEvents } from '../worker/with-worker'
 
 /** Minimal enqueue surface for a dead-letter destination. */
@@ -78,7 +79,7 @@ export class DeadLetterEnqueueError extends Error {
 }
 
 /**
- * Park `worker:failed` items on a **distinct** sink queue via `enqueue`.
+ * Park failed items on a **distinct** sink queue via `enqueue`.
  *
  * Use this when you want to **consume failures on your schedule** (pull / drain
  * the sink with another worker, batch job, or later pass) instead of handling
@@ -137,13 +138,8 @@ export const withDeadLetter = <
         eventName: string,
         data: unknown,
     ) => void
-    const onInner = inner.on as (
-        eventName: string,
-        callback: EventCallback<unknown>,
-    ) => () => void
 
-    onInner('worker:failed', (payload) => {
-        const { item, error } = payload as { item: T; error: unknown }
+    subscribeInternalFailed<T>(inner, ({ item, error }) => {
         try {
             if (!filter(item, error)) return
             const deadLetterItem = map(item, error)

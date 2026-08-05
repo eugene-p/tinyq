@@ -365,4 +365,147 @@ describe('withWorker', () => {
 
         expect(failed).toHaveBeenCalledWith({ item: 1, error })
     })
+
+    it('setConcurrency raises and lowers the limit at runtime', async () => {
+        let current = 0
+        let maxConcurrent = 0
+        const releases: Array<() => void> = []
+
+        const worker = vi.fn(async (item: number) => {
+            current += 1
+            maxConcurrent = Math.max(maxConcurrent, current)
+            await new Promise<void>((resolve) => {
+                releases.push(resolve)
+            })
+            current -= 1
+            return item
+        })
+
+        const queue = withWorker(buildQueue<number>(), worker, {
+            concurrency: 1,
+        })
+        expect(queue.getConcurrency()).toBe(1)
+
+        queue.enqueue(1)
+        queue.enqueue(2)
+        queue.enqueue(3)
+        await flush(2)
+        expect(worker).toHaveBeenCalledTimes(1)
+
+        queue.setConcurrency(3)
+        expect(queue.getConcurrency()).toBe(3)
+        await flush(3)
+        expect(worker).toHaveBeenCalledTimes(3)
+        expect(maxConcurrent).toBe(3)
+
+        for (const release of releases) release()
+        await waitForIdle(queue)
+    })
+
+    it('stops when AbortSignal aborts', async () => {
+        const AC = (
+            globalThis as unknown as {
+                AbortController: new () => {
+                    signal: {
+                        aborted: boolean
+                        addEventListener: (
+                            type: string,
+                            listener: () => void,
+                            options?: { once?: boolean },
+                        ) => void
+                        removeEventListener: (
+                            type: string,
+                            listener: () => void,
+                        ) => void
+                    }
+                    abort: () => void
+                }
+            }
+        ).AbortController
+        const ac = new AC()
+        const worker = vi.fn(async (n: number) => n)
+        const queue = withWorker(buildQueue<number>(), worker, {
+            signal: ac.signal,
+            autoStart: false,
+        })
+        queue.start()
+        queue.enqueue(1)
+        await waitForIdle(queue)
+        expect(worker).toHaveBeenCalledTimes(1)
+
+        ac.abort()
+        worker.mockClear()
+        queue.enqueue(2)
+        await flush(3)
+        expect(worker).not.toHaveBeenCalled()
+        expect(queue.isRunning()).toBe(false)
+    })
+
+    it('trackStats counts completed and failed', async () => {
+        let fail = true
+        const queue = withWorker(
+            buildQueue<number>({ trackStats: true }),
+            async (n) => {
+                if (fail) {
+                    fail = false
+                    throw new Error('x')
+                }
+                return n
+            },
+            { trackStats: true },
+        )
+        queue.enqueue(1)
+        queue.enqueue(2)
+        await waitForIdle(queue)
+        expect(queue.stats?.()).toMatchObject({
+            enqueued: 2,
+            failed: 1,
+            completed: 1,
+            active: 0,
+        })
+    })
+
+    it('drain rejects when aborted with remaining work', async () => {
+        const AC = (
+            globalThis as unknown as {
+                AbortController: new () => {
+                    signal: {
+                        aborted: boolean
+                        addEventListener: (
+                            type: string,
+                            listener: () => void,
+                            options?: { once?: boolean },
+                        ) => void
+                        removeEventListener: (
+                            type: string,
+                            listener: () => void,
+                        ) => void
+                    }
+                    abort: () => void
+                }
+            }
+        ).AbortController
+        const ac = new AC()
+        let release!: () => void
+        const gate = new Promise<void>((r) => {
+            release = r
+        })
+        const queue = withWorker(
+            buildQueue<number>(),
+            async (n) => {
+                if (n === 1) await gate
+                return n
+            },
+            { signal: ac.signal, concurrency: 1 },
+        )
+        queue.enqueue(1)
+        queue.enqueue(2)
+        await flush(2)
+        ac.abort()
+        await expect(queue.drain()).rejects.toMatchObject({
+            name: 'WorkerAbortedError',
+        })
+        release()
+        await flush(3)
+    })
 })

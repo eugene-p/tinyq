@@ -17,6 +17,9 @@
     "bench:worker-payload": "npm run build:tinyq && npm run bench:worker-payload -w @qkitt/tinyq-bench",
     "bench:worker-work": "npm run build:tinyq && npm run bench:worker-work -w @qkitt/tinyq-bench",
     "bench:router": "npm run build:tinyq && npm run bench:router -w @qkitt/tinyq-bench",
+    "bench:worker-loop": "npm run build:tinyq && npm run bench:worker-loop -w @qkitt/tinyq-bench",
+    "bench:fifo-steady": "npm run build:tinyq && npm run bench:fifo-steady -w @qkitt/tinyq-bench",
+    "bench:retry-sync": "npm run build:tinyq && npm run bench:retry-sync -w @qkitt/tinyq-bench",
     "pack:check": "npm run pack:check -w @qkitt/tinyq",
     "release:check": "npm run typecheck && npm test && npm run build && npm run pack:check",
     "examples": "tsx examples/worker-drain/main.ts && tsx examples/retry-pipeline/main.ts && tsx examples/with-loop/main.ts && tsx examples/with-dlq/main.ts && tsx examples/loop-and-dlq/main.ts && tsx examples/lifecycle/main.ts"

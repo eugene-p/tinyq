@@ -3,9 +3,11 @@ export {
     InvalidQueueOptionError,
     QueueFullError,
     type BuildQueueOptions,
+    type OverflowPolicy,
     type Queue,
     type QueueEvents,
     type QueueSlot,
+    type QueueStats,
 } from './core/queue'
 
 export { InvalidQueueCompositionError } from './core/composition-error'
@@ -27,6 +29,12 @@ export {
     type IdleWaitable,
     type WhenIdleOptions,
 } from './worker/when-idle'
+
+export {
+    drain,
+    type Drainable,
+    type DrainOptions,
+} from './worker/drain'
 
 export {
     gracefulStop,
@@ -51,6 +59,7 @@ export {
     LoopEnqueueError,
     TQ_KEY,
     withLoop,
+    type LoopControls,
     type LoopEvents,
     type LoopMapContext,
     type LoopQueueEvents,

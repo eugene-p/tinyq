@@ -146,14 +146,17 @@ topics.publish('orders.created', { id: 'o_1' })
 | Task | How |
 | --- | --- |
 | Concurrent jobs | `withWorker(buildQueue(), run, { concurrency })` |
-| Wait until drained | `whenIdle(queue, { timeoutMs })` |
+| Wait until drained | `whenIdle(queue, { timeoutMs })` or `queue.drain({ timeoutMs })` |
 | Stop, keep backlog | `gracefulStop(queue, { timeoutMs })` or `queue.gracefulStop({ timeoutMs })` |
 | In-call retries | `retryWorker(fn, { retries, delay })` → pass to `withWorker` |
 | Multi-step body | `pipelineWorker([step1, step2])` → pass to `withWorker` |
 | Same-queue re-entry | `withLoop(withWorker(...), { filter, delay, map })` — needs `name` |
 | Failure sink | `withDlq(withWorker(...), sinkQueue)` |
 | Hop, then sink | `withLoop` then `withDlq` with complementary `filter`s |
-| Bounded backlog | `buildQueue({ maxSize })` — `enqueue` throws `QueueFullError` |
+| Bounded backlog | `buildQueue({ maxSize, overflow?: 'throw' \| 'dropOldest' \| 'dropNewest' })` |
+| Backpressure signal | `buildQueue({ highWaterMark })` → `queue:pressure` |
+| Runtime concurrency | `queue.setConcurrency(n)` |
+| Exponential delay | `retryWorker(fn, { delay: exponentialBackoff({ base, max, jitter }) })` |
 | Topic fan-out | `buildTopicRouter()` → `bind(pattern, queue)` → `publish(topic, data)` |
 
 Runnable scenarios: [examples/](https://github.com/eugene-p/tinyq/tree/main/examples) in the monorepo.

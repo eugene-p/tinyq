@@ -4,20 +4,29 @@ import {
     type MergeEventMaps,
 } from '../../events'
 import { createSubscriptionCounts } from '../../events/subscription-counts'
+import type { AbortSignalLike } from '../../util/abort-signal.util'
 import { isIntegerInRange } from '../../util/number.util'
+import {
+    scheduleMicrotask,
+} from '../../util/schedule-timeout.util'
 import type { WorkerFn } from '../../worker/types'
 import {
     decorateQueue,
     type PreserveQueueExtras,
 } from '../core/forward.util'
 import { markQueueLayer, WORKER_LAYER } from '../core/layers.util'
-import type { Queue, QueueEvents } from '../core/queue'
+import type { Queue, QueueEvents, QueueStats } from '../core/queue'
 import {
     gracefulStop as runGracefulStop,
     type GracefulStopable,
     type GracefulStopOptions,
 } from './graceful-stop'
+import {
+    INTERNAL_FAILED_SUBSCRIBE,
+    type InternalFailedHandler,
+} from './internal-failed.util'
 import { InvalidWorkerOptionError } from './invalid-worker-option-error'
+import { drain as runDrain, type DrainOptions } from './drain'
 
 export { InvalidWorkerOptionError } from './invalid-worker-option-error'
 
@@ -47,6 +56,21 @@ export type WithWorkerOptions = {
     concurrency?: number
     /** Start pumping immediately. Defaults to true. */
     autoStart?: boolean
+    /**
+     * When aborted, stops taking new items (same as {@link WorkerControls.stop}).
+     * In-flight work is not cancelled.
+     */
+    signal?: AbortSignalLike
+    /**
+     * Coalesce async settle re-pumps into one microtask.
+     * Default: auto-enable when `concurrency >= 4`.
+     */
+    batchRepump?: boolean
+    /**
+     * When true, {@link WorkerControls.stats} reports counters including
+     * completed / failed / active.
+     */
+    trackStats?: boolean
 }
 
 type WorkerQueueEvents<T, R, TEvents extends EventMap> = MergeEventMaps<
@@ -64,12 +88,26 @@ export type WorkerControls = {
      * Remaining queued items are left in place (not a full drain).
      */
     gracefulStop: (options?: GracefulStopOptions) => Promise<void>
+    /**
+     * Run until the queue is empty and idle, or reject on timeout.
+     * Unlike {@link gracefulStop}, does not stop the pump first.
+     */
+    drain: (options?: DrainOptions) => Promise<void>
     /** Whether the worker is allowed to take new items. */
     isRunning: () => boolean
     /** Whether any items are currently being processed. */
     isProcessing: () => boolean
     /** Number of items currently being processed. */
     activeCount: () => number
+    /**
+     * Change concurrency at runtime.
+     * Lowering below active lets in-flight finish; raising pumps more.
+     */
+    setConcurrency: (n: number) => void
+    /** Current concurrency limit. */
+    getConcurrency: () => number
+    /** Stats when `trackStats` is enabled on the queue and/or worker. */
+    stats?: () => QueueStats
 }
 
 export type QueueWithWorker<
@@ -133,8 +171,10 @@ export const withWorker = <
     options: WithWorkerOptions = {},
 ): QueueWithWorker<T, R, WorkerQueueEvents<T, R, TEvents>> &
     PreserveQueueExtras<TQueue> => {
-    const concurrency = resolveConcurrency(options.concurrency)
+    let concurrency = resolveConcurrency(options.concurrency)
     const autoStart = options.autoStart ?? true
+    const trackStats = options.trackStats === true
+    const batchRepumpOpt = options.batchRepump
 
     const inner = queue
     /** Reused by the pump — never retained across async turns as the sole item ref. */
@@ -165,6 +205,56 @@ export const withWorker = <
     /** Counts async-only in-flight items. Sync items complete within the loop iteration. */
     let active = 0
     let pumping = false
+    let pumpScheduled = false
+    let completedCount = 0
+    let failedCount = 0
+
+    const internalHandlers: InternalFailedHandler<T>[] = []
+    let internalFailed = 0
+
+    const notifyInternalFailed = (item: T, error: unknown): void => {
+        // Snapshot so a handler that unsubscribes mid-notify cannot skip the next.
+        const handlers = internalHandlers.slice()
+        for (let i = 0; i < handlers.length; i += 1) {
+            try {
+                handlers[i]!({ item, error })
+            } catch {
+                // Isolate layer handler failures from the pump.
+            }
+        }
+    }
+
+    const subscribeInternalFailed = (
+        handler: InternalFailedHandler<T>,
+    ): (() => void) => {
+        internalHandlers.push(handler)
+        internalFailed += 1
+        return () => {
+            const idx = internalHandlers.indexOf(handler)
+            if (idx >= 0) {
+                internalHandlers.splice(idx, 1)
+                internalFailed -= 1
+            }
+        }
+    }
+
+    const requestPump = (): void => {
+        if (pumping) return
+        const batch =
+            batchRepumpOpt !== undefined
+                ? batchRepumpOpt
+                : concurrency >= 4
+        if (batch) {
+            if (pumpScheduled) return
+            pumpScheduled = true
+            scheduleMicrotask(() => {
+                pumpScheduled = false
+                pump()
+            })
+            return
+        }
+        pump()
+    }
 
     /**
      * Called when an async item's thenable settles (both fulfilled and rejected
@@ -181,27 +271,75 @@ export const withWorker = <
             emitInner('worker:settled', undefined)
         }
         if (!pumping) {
-            pump()
+            requestPump()
         }
+    }
+
+    /**
+     * With one concurrency slot, internal failure layers can share one pair
+     * of settle callbacks because there is only one item in flight. This
+     * preserves the zero-success-closure path without capturing each item.
+     */
+    let singleInternalItem: T | undefined
+    let singleInternalActive = false
+
+    const completeSingleInternal = (): void => {
+        if (!singleInternalActive) return
+        singleInternalActive = false
+        singleInternalItem = undefined
+        if (trackStats) completedCount += 1
+        finishAsync()
+    }
+
+    const failSingleInternal = (error: unknown): void => {
+        if (!singleInternalActive) return
+        notifyInternalFailed(singleInternalItem as T, error)
+        singleInternalActive = false
+        singleInternalItem = undefined
+        if (trackStats) failedCount += 1
+        finishAsync()
+    }
+
+    let abortAttached = false
+
+    const onAbort = (): void => {
+        abortAttached = false
+        running = false
+    }
+
+    const attachAbort = (): void => {
+        if (
+            options.signal === undefined ||
+            options.signal.aborted ||
+            abortAttached
+        ) {
+            return
+        }
+        options.signal.addEventListener('abort', onAbort, { once: true })
+        abortAttached = true
+    }
+
+    const detachAbort = (): void => {
+        if (!abortAttached || options.signal === undefined) return
+        options.signal.removeEventListener('abort', onAbort)
+        abortAttached = false
     }
 
     const stop = (): void => {
         running = false
+        // Drop the listener so discarded workers do not pin a shared signal.
+        // start() re-attaches if the signal is still live.
+        detachAbort()
     }
 
     const pump = (): void => {
         if (pumping) return
         pumping = true
-        // Resolve once per pump — bare→loud may swap on queue:* subscribe,
-        // but not mid-drain under normal use.
         const takeTo = inner.takeTo
         try {
             while (running && active < concurrency) {
-                // takeTo: one emptiness check; nullish payloads remain valid.
                 if (!takeTo(takeOut)) break
                 const item = takeOut.value
-                // Drop the slot reference immediately so payloads are not
-                // retained by takeOut across the worker call.
                 takeOut.value = undefined as unknown as T
 
                 if (subs.started > 0) {
@@ -212,7 +350,8 @@ export const withWorker = <
                 try {
                     ret = worker(item)
                 } catch (error) {
-                    // Sync throw: item is done, no active change needed.
+                    if (trackStats) failedCount += 1
+                    notifyInternalFailed(item, error)
                     if (subs.failed > 0) {
                         emitInner('worker:failed', { item, error })
                     }
@@ -220,22 +359,66 @@ export const withWorker = <
                 }
 
                 if (isThenable(ret)) {
-                    // Async item: track as in-flight so concurrency + isProcessing stay correct.
+                    if (
+                        concurrency === 1 &&
+                        internalFailed > 0 &&
+                        subs.completed === 0 &&
+                        subs.failed === 0
+                    ) {
+                        singleInternalItem = item
+                        singleInternalActive = true
+                        active += 1
+                        try {
+                            ret.then(completeSingleInternal, failSingleInternal)
+                        } catch (error) {
+                            failSingleInternal(error)
+                        }
+                        continue
+                    }
+
                     active += 1
                     try {
+                        // Fast path: no user completed/failed listeners.
+                        // Internal failure hooks do not force success-path closures
+                        // when stats are off (reuse stable finishAsync on success).
                         if (subs.completed === 0 && subs.failed === 0) {
-                            // Fast path — no completed/failed listeners: reuse the stable
-                            // `finishAsync` ref so the engine allocates no new closures.
-                            // (worker:settled is handled inside finishAsync at settle time.)
-                            ret.then(
-                                finishAsync as (value: unknown) => void,
-                                finishAsync,
-                            )
+                            if (internalFailed === 0 && !trackStats) {
+                                ret.then(
+                                    finishAsync as (value: unknown) => void,
+                                    finishAsync,
+                                )
+                            } else if (internalFailed === 0) {
+                                ret.then(
+                                    () => {
+                                        completedCount += 1
+                                        finishAsync()
+                                    },
+                                    () => {
+                                        failedCount += 1
+                                        finishAsync()
+                                    },
+                                )
+                            } else {
+                                ret.then(
+                                    trackStats
+                                        ? () => {
+                                              completedCount += 1
+                                              finishAsync()
+                                          }
+                                        : (finishAsync as (
+                                              value: unknown,
+                                          ) => void),
+                                    (error: unknown) => {
+                                        if (trackStats) failedCount += 1
+                                        notifyInternalFailed(item, error)
+                                        finishAsync()
+                                    },
+                                )
+                            }
                         } else {
-                            // Slow path — at least one payload event listener: closures over
-                            // `item` are required to build the event object.
                             ret.then(
                                 (result) => {
+                                    if (trackStats) completedCount += 1
                                     if (subs.completed > 0) {
                                         emitInner('worker:completed', {
                                             item,
@@ -245,6 +428,8 @@ export const withWorker = <
                                     finishAsync()
                                 },
                                 (error: unknown) => {
+                                    if (trackStats) failedCount += 1
+                                    notifyInternalFailed(item, error)
                                     if (subs.failed > 0) {
                                         emitInner('worker:failed', {
                                             item,
@@ -256,21 +441,21 @@ export const withWorker = <
                             )
                         }
                     } catch (error) {
-                        // Broken thenable: .then() itself threw.
+                        if (trackStats) failedCount += 1
+                        notifyInternalFailed(item, error)
                         if (subs.failed > 0) {
                             emitInner('worker:failed', { item, error })
                         }
                         finishAsync()
                     }
                 } else {
-                    // Sync success: item is complete, no active change needed.
+                    if (trackStats) completedCount += 1
                     if (subs.completed > 0) {
                         emitInner('worker:completed', { item, result: ret })
                     }
                 }
             }
         } catch (error) {
-            // Unexpected dequeue failure: surface and stop so it is not silent.
             if (subs.pumpError > 0) {
                 emitInner('worker:pump-error', { error })
             }
@@ -278,32 +463,30 @@ export const withWorker = <
         } finally {
             pumping = false
         }
-        // Single idle checkpoint after the drain turn (sync and async re-entry).
         if (subs.idle > 0 && active === 0 && inner.isEmpty()) {
             emitInner('worker:idle', undefined)
         }
     }
 
     const start = (): void => {
+        if (options.signal?.aborted) return
         if (running) return
+        attachAbort()
         running = true
         pump()
     }
 
-    /** Enqueue then pump — no `queue:enqueued` subscription on the hot path. */
     const enqueue = (item: T): void => {
-        // Live property: bare→loud swap on first queue:* subscriber.
         inner.enqueue(item)
         pump()
     }
 
-    /** Bulk load then pump so preloaded work starts without a separate start race. */
     const replaceAll = (items: readonly T[]): void => {
         inner.replaceAll(items)
         pump()
     }
 
-    if (autoStart) {
+    if (autoStart && !options.signal?.aborted) {
         start()
     }
 
@@ -330,18 +513,78 @@ export const withWorker = <
         )
     }
 
+    const drain = (drainOptions?: DrainOptions): Promise<void> => {
+        if (options.signal?.aborted) {
+            if (inner.isEmpty() && !isProcessing()) {
+                return Promise.resolve()
+            }
+            const error = new Error(
+                'drain cannot complete: worker signal is aborted with remaining work',
+            )
+            error.name = 'WorkerAbortedError'
+            return Promise.reject(error)
+        }
+        if (!running) {
+            start()
+        }
+        return runDrain(
+            {
+                isEmpty: () => inner.isEmpty(),
+                isProcessing,
+                on: on as Parameters<typeof runDrain>[0]['on'],
+            },
+            drainOptions,
+        )
+    }
+
+    const setConcurrency = (n: number): void => {
+        concurrency = resolveConcurrency(n)
+        if (running) pump()
+    }
+
+    const baseStats = typeof inner.stats === 'function' ? inner.stats : undefined
+
+    const stats = (): QueueStats => {
+        const base = baseStats?.() ?? {
+            size: inner.size(),
+            enqueued: 0,
+            dequeued: 0,
+            failed: 0,
+            completed: 0,
+            active: 0,
+        }
+        return {
+            size: inner.size(),
+            enqueued: base.enqueued,
+            dequeued: base.dequeued,
+            failed: failedCount,
+            completed: completedCount,
+            active,
+        }
+    }
+
+    const overrides: Record<string | symbol, unknown> = {
+        on,
+        enqueue,
+        replaceAll,
+        start,
+        stop,
+        gracefulStop,
+        drain,
+        isRunning: () => running,
+        isProcessing,
+        activeCount: () => active,
+        setConcurrency,
+        getConcurrency: () => concurrency,
+        [INTERNAL_FAILED_SUBSCRIBE]: subscribeInternalFailed,
+    }
+
+    if (trackStats || baseStats !== undefined) {
+        overrides.stats = stats
+    }
+
     const api = markQueueLayer(
-        decorateQueue(inner, {
-            on,
-            enqueue,
-            replaceAll,
-            start,
-            stop,
-            gracefulStop,
-            isRunning: () => running,
-            isProcessing,
-            activeCount: () => active,
-        }),
+        decorateQueue(inner, overrides),
         WORKER_LAYER,
     )
 

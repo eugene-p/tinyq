@@ -28,6 +28,32 @@ const waitForIdle = (
 const named = <T>(name: string) => buildQueue<T>({ name })
 
 describe('withLoop', () => {
+    it('tracks pending delay timers and can cancel them on stop', async () => {
+        vi.useFakeTimers()
+        try {
+            const queue = withLoop(
+                withWorker(
+                    named<number>('jobs'),
+                    async () => {
+                        throw new Error('fail')
+                    },
+                    { autoStart: true },
+                ),
+                { delay: 1_000, cancelDelayedOnStop: true },
+            )
+
+            queue.enqueue(1)
+            await flush(4)
+            expect(queue.pendingDelayedCount()).toBe(1)
+            queue.stop()
+            expect(queue.pendingDelayedCount()).toBe(0)
+            await vi.advanceTimersByTimeAsync(2_000)
+            expect(queue.size()).toBe(0)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
     it('throws when source has no worker layer', () => {
         expect(() =>
             withLoop(

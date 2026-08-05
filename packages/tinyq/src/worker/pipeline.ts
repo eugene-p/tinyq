@@ -142,6 +142,10 @@ export class PipelineStepError extends Error {
     }
 }
 
+/** Thenable check — same surface as `await`. */
+const isThenable = (value: unknown): value is PromiseLike<unknown> =>
+    value != null && typeof (value as { then?: unknown }).then === 'function'
+
 /**
  * Compose steps into a worker function (pipe / chain):
  * output of step n is the input of step n+1.
@@ -152,6 +156,9 @@ export class PipelineStepError extends Error {
  * Empty arrays throw at construction. Step failures throw {@link PipelineStepError}.
  * A step may return {@link pipelineDone}`(value)` to finish successfully early
  * (later steps are not run; the worker resolves with `value`).
+ *
+ * When every step returns a non-thenable (sync pipeline), the result is returned
+ * **synchronously** so the outer worker can stay on its sync path.
  *
  * Type parameters: pass `pipelineWorker<In, Out>(steps)` when you need a precise
  * result type — heterogeneous step arrays cannot infer end-to-end types.
@@ -177,13 +184,59 @@ export function pipelineWorker<T, R = unknown>(
 
     const normalized = steps.map(normalizeStep)
 
-    return async (input: T): Promise<R> => {
+    const runFrom = async (
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        value: any,
+        startIndex: number,
+    ): Promise<R> => {
+        for (let i = startIndex; i < normalized.length; i += 1) {
+            const step = normalized[i]!
+            try {
+                const ret = step.fn(value, step.ctx)
+                value = isThenable(ret) ? await ret : ret
+            } catch (error) {
+                throw new PipelineStepError(
+                    step.name,
+                    i,
+                    error,
+                    step.metadata,
+                )
+            }
+            if (isPipelineDone(value)) {
+                return value.value as R
+            }
+        }
+        return value as R
+    }
+
+    return (input: T): R | Promise<R> => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         let value: any = input
         for (let i = 0; i < normalized.length; i += 1) {
             const step = normalized[i]!
             try {
-                value = await step.fn(value, step.ctx)
+                const ret = step.fn(value, step.ctx)
+                if (isThenable(ret)) {
+                    return Promise.resolve(ret)
+                        .then((resolved) => {
+                            if (isPipelineDone(resolved)) {
+                                return resolved.value as R
+                            }
+                            return runFrom(resolved, i + 1)
+                        })
+                        .catch((error: unknown) => {
+                            if (error instanceof PipelineStepError) {
+                                throw error
+                            }
+                            throw new PipelineStepError(
+                                step.name,
+                                i,
+                                error,
+                                step.metadata,
+                            )
+                        })
+                }
+                value = ret
             } catch (error) {
                 throw new PipelineStepError(
                     step.name,
@@ -199,4 +252,3 @@ export function pipelineWorker<T, R = unknown>(
         return value as R
     }
 }
-

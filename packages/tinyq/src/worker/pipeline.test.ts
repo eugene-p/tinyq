@@ -285,5 +285,27 @@ describe('pipelineWorker', () => {
             expect(attempts).toHaveBeenCalledOnce()
         })
     })
+
+    it('preserves fully sync pipelines as non-thenable results', () => {
+        const worker = pipelineWorker([
+            (n: number) => n + 1,
+            (n: number) => n * 2,
+        ])
+        const result = worker(3)
+        expect(result).toBe(8)
+        expect(typeof (result as { then?: unknown })?.then).not.toBe(
+            'function',
+        )
+    })
+
+    it('preserves sync pipelineDone as non-thenable', () => {
+        const later = vi.fn((n: number) => n)
+        const worker = pipelineWorker([
+            (n: number) => pipelineDone(n * 10),
+            later,
+        ])
+        expect(worker(2)).toBe(20)
+        expect(later).not.toHaveBeenCalled()
+    })
 })
 
