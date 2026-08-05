@@ -40,6 +40,26 @@ describe('buildTopicRouter', () => {
         expect(queue.isEmpty()).toBe(true)
     })
 
+    it('indexes many exact bindings and preserves duplicate targets', () => {
+        const router = buildTopicRouter()
+        const queues = Array.from({ length: 100 }, () =>
+            buildQueue<TopicMessage>(),
+        )
+        for (let i = 0; i < queues.length; i += 1) {
+            router.bind(`metrics.host${i}`, queues[i]!)
+        }
+        router.bind('metrics.host99', queues[0]!)
+
+        expect(router.publish('metrics.host99', 42)).toBe(2)
+        expect(queues[99]!.size()).toBe(1)
+        expect(queues[0]!.size()).toBe(1)
+
+        router.unbind('metrics.host99', queues[0]!)
+        expect(router.publish('metrics.host99', 43)).toBe(1)
+        expect(queues[99]!.size()).toBe(2)
+        expect(queues[0]!.size()).toBe(1)
+    })
+
     it('tracks and optionally delivers unmatched topics', () => {
         const unmatched = buildQueue<TopicMessage>()
         const router = buildTopicRouter({ unmatchedTarget: unmatched })
