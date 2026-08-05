@@ -105,6 +105,8 @@ type InternalBinding = TopicBinding & {
     readonly hasWildcard: boolean
 }
 
+type ExactBucket = InternalBinding | InternalBinding[]
+
 /** Validate a concrete topic without allocating a split-parts array. */
 const isValidTopic = (topic: string): boolean => {
     if (topic.length === 0) return false
@@ -174,6 +176,10 @@ export const buildTopicRouter = (
     options: BuildTopicRouterOptions = {},
 ): TopicRouter => {
     const routes: InternalBinding[] = []
+    // Keep the common one-target case allocation-light; promote to an array
+    // only when a topic has multiple exact destinations.
+    const exactRoutes = new Map<string, ExactBucket>()
+    let wildcardRouteCount = 0
     let routeVersion = 0
     let unmatchedTarget = options.unmatchedTarget
     const trackUnmatched = options.trackUnmatched !== false
@@ -205,14 +211,29 @@ export const buildTopicRouter = (
         target?: TopicTarget<T>,
     ): void => {
         let removed = 0
+        let removedExact = false
         for (let i = routes.length - 1; i >= 0; i -= 1) {
             const route = routes[i]!
             if (route.pattern !== pattern) continue
             if (target !== undefined && route.target !== target) continue
             routes.splice(i, 1)
+            if (route.hasWildcard) wildcardRouteCount -= 1
+            else removedExact = true
             removed += 1
         }
         if (removed > 0) {
+            if (removedExact) {
+                let bucket: ExactBucket | undefined
+                for (let i = 0; i < routes.length; i += 1) {
+                    const route = routes[i]!
+                    if (route.hasWildcard || route.pattern !== pattern) continue
+                    if (bucket === undefined) bucket = route
+                    else if (Array.isArray(bucket)) bucket.push(route)
+                    else bucket = [bucket, route]
+                }
+                if (bucket === undefined) exactRoutes.delete(pattern)
+                else exactRoutes.set(pattern, bucket)
+            }
             routeVersion += 1
             emitter?.emit('router:unbound', { pattern, removed })
         }
@@ -231,7 +252,7 @@ export const buildTopicRouter = (
         const hasWildcard =
             pattern.includes(SINGLE_WILDCARD) ||
             pattern.includes(MULTI_WILDCARD)
-        routes.push({
+        const route: InternalBinding = {
             pattern,
             hasWildcard,
             // Exact bindings only compare the original topic string; keep one
@@ -240,7 +261,16 @@ export const buildTopicRouter = (
                 ? pattern.split(TOPIC_SEPARATOR)
                 : EMPTY_PARTS,
             target: target as TopicTarget,
-        })
+        }
+        routes.push(route)
+        if (hasWildcard) {
+            wildcardRouteCount += 1
+        } else {
+            const bucket = exactRoutes.get(pattern)
+            if (bucket === undefined) exactRoutes.set(pattern, route)
+            else if (Array.isArray(bucket)) bucket.push(route)
+            else exactRoutes.set(pattern, [bucket, route])
+        }
         routeVersion += 1
         emitter?.emit('router:bound', { pattern })
         return () => unbind(pattern, target)
@@ -259,48 +289,61 @@ export const buildTopicRouter = (
 
         const message: TopicMessage<T> = { topic, data }
         let matched = 0
-        const startVersion = routeVersion
-        // Created only if a wildcard binding is encountered. Exact-only
-        // routers stay string-to-string from validation through delivery.
-        let topicParts: string[] | undefined
 
-        // Avoid a snapshot allocation in normal operation, but finish safely
-        // if a target changes bindings re-entrantly while handling a publish.
-        let index = 0
-        for (; index < routes.length; index += 1) {
-            if (routeVersion !== startVersion) {
-                break
+        // Exact-only routers are lookup-bound, not route-count-bound. The
+        // single binding representation also avoids a bucket-array allocation.
+        if (wildcardRouteCount === 0) {
+            const onlyRoute = routes.length === 1 ? routes[0] : undefined
+            const bucket =
+                onlyRoute !== undefined
+                    ? onlyRoute.pattern === topic
+                        ? onlyRoute
+                        : undefined
+                    : exactRoutes.get(topic)
+            if (bucket !== undefined) {
+                if (Array.isArray(bucket)) {
+                    matched = bucket.length
+                    for (let i = 0; i < bucket.length; i += 1) {
+                        const route = bucket[i]!
+                        try {
+                            route.target.enqueue(message as TopicMessage)
+                        } catch (error) {
+                            emitter?.emit('router:error', {
+                                operation: 'publish',
+                                error,
+                                topic,
+                                pattern: route.pattern,
+                            })
+                        }
+                    }
+                } else {
+                    matched = 1
+                    try {
+                        bucket.target.enqueue(message as TopicMessage)
+                    } catch (error) {
+                        emitter?.emit('router:error', {
+                            operation: 'publish',
+                            error,
+                            topic,
+                            pattern: bucket.pattern,
+                        })
+                    }
+                }
             }
-            const route = routes[index]!
-            if (
-                route.hasWildcard
-                    ? !matches(
-                          route.patternParts,
-                          (topicParts ??= topic.split(TOPIC_SEPARATOR)),
-                      )
-                    : route.pattern !== topic
-            ) {
-                continue
-            }
-            matched += 1
-            try {
-                route.target.enqueue(message as TopicMessage)
-            } catch (error) {
-                emitter?.emit('router:error', {
-                    operation: 'publish',
-                    error,
-                    topic,
-                    pattern: route.pattern,
-                })
-            }
-        }
+        } else {
+            const startVersion = routeVersion
+            // Created only if a wildcard binding is encountered. Exact-only
+            // routers stay string-to-string from validation through delivery.
+            let topicParts: string[] | undefined
 
-        // A re-entrant binding change is unusual; pay the snapshot cost only
-        // then. The ordinary route stays one loop with no per-publish closure.
-        if (index < routes.length) {
-            const remaining = routes.slice(index)
-            for (let i = 0; i < remaining.length; i += 1) {
-                const route = remaining[i]!
+            // Avoid a snapshot allocation in normal operation, but finish safely
+            // if a target changes bindings re-entrantly while handling a publish.
+            let index = 0
+            for (; index < routes.length; index += 1) {
+                if (routeVersion !== startVersion) {
+                    break
+                }
+                const route = routes[index]!
                 if (
                     route.hasWildcard
                         ? !matches(
@@ -321,6 +364,36 @@ export const buildTopicRouter = (
                         topic,
                         pattern: route.pattern,
                     })
+                }
+            }
+
+            // A re-entrant binding change is unusual; pay the snapshot cost only
+            // then. The ordinary route stays one loop with no per-publish closure.
+            if (index < routes.length) {
+                const remaining = routes.slice(index)
+                for (let i = 0; i < remaining.length; i += 1) {
+                    const route = remaining[i]!
+                    if (
+                        route.hasWildcard
+                            ? !matches(
+                                  route.patternParts,
+                                  (topicParts ??= topic.split(TOPIC_SEPARATOR)),
+                              )
+                            : route.pattern !== topic
+                    ) {
+                        continue
+                    }
+                    matched += 1
+                    try {
+                        route.target.enqueue(message as TopicMessage)
+                    } catch (error) {
+                        emitter?.emit('router:error', {
+                            operation: 'publish',
+                            error,
+                            topic,
+                            pattern: route.pattern,
+                        })
+                    }
                 }
             }
         }
@@ -355,6 +428,8 @@ export const buildTopicRouter = (
         const removed = routes.length
         if (removed === 0) return
         routes.length = 0
+        exactRoutes.clear()
+        wildcardRouteCount = 0
         routeVersion += 1
         emitter?.emit('router:cleared', { removed })
     }

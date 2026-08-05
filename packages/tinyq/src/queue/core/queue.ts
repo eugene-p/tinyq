@@ -179,7 +179,7 @@ export class InvalidQueueOptionError extends Error {
     }
 }
 
-/** Compact head-indexed storage when the hole grows large enough. */
+/** Power-of-two interval for requesting head-indexed compaction checks. */
 const COMPACT_HEAD_MIN = 1024
 
 /**
@@ -312,15 +312,9 @@ const buildHeadIndexedQueue = <T>(opts: HeadIndexedOpts): Queue<T> => {
 
     let emitter: EventEmitter<QueueEvents<T>> | undefined
     let subs: QueueSubs | undefined
+    let compactOnNextEnqueue = false
 
     const liveSize = (): number => items.length - head
-
-    const maybeCompact = (): void => {
-        if (head > COMPACT_HEAD_MIN && head > items.length / 2) {
-            items = items.slice(head)
-            head = 0
-        }
-    }
 
     /** Assumes the queue is non-empty. */
     const removeHead = (): T => {
@@ -330,8 +324,8 @@ const buildHeadIndexedQueue = <T>(opts: HeadIndexedOpts): Queue<T> => {
         if (head === items.length) {
             items = []
             head = 0
-        } else {
-            maybeCompact()
+        } else if ((head & (COMPACT_HEAD_MIN - 1)) === 0) {
+            compactOnNextEnqueue = true
         }
         return value
     }
@@ -364,55 +358,83 @@ const buildHeadIndexedQueue = <T>(opts: HeadIndexedOpts): Queue<T> => {
         checkPressure(size)
     }
 
-    const pushItem = (item: T): void => {
-        items.push(item)
-        if (trackStats) enqueuedCount += 1
-    }
+    const pushItem: (item: T) => void = trackStats
+        ? (item): void => {
+              items.push(item)
+              enqueuedCount += 1
+          }
+        : (item): void => {
+              items.push(item)
+          }
 
-    const enqueueBare = (item: T): void => {
-        pushItem(item)
-        if (highWaterMark !== undefined) {
-            const size = liveSize()
-            const above = size > highWaterMark
-            if (above !== aboveHighWater) aboveHighWater = above
+    const compactBeforeEnqueue = (): void => {
+        compactOnNextEnqueue = false
+        const live = liveSize()
+        if (head >= COMPACT_HEAD_MIN && head >= live) {
+            items = items.slice(head)
+            head = 0
         }
     }
 
-    const takeToBare = (out: { value: T }): boolean => {
-        if (head === items.length) return false
-        out.value = removeHead()
+    const enqueueBare: (item: T) => void =
+        highWaterMark === undefined
+            ? (item): void => {
+                  if (compactOnNextEnqueue) compactBeforeEnqueue()
+                  pushItem(item)
+              }
+            : (item): void => {
+                  if (compactOnNextEnqueue) compactBeforeEnqueue()
+                  pushItem(item)
+                  const above = liveSize() > highWaterMark
+                  if (above !== aboveHighWater) aboveHighWater = above
+              }
+
+    const afterBareDequeue = (): void => {
         if (trackStats) dequeuedCount += 1
         if (highWaterMark !== undefined) {
-            const size = liveSize()
-            const above = size > highWaterMark
+            const above = liveSize() > highWaterMark
             if (above !== aboveHighWater) aboveHighWater = above
         }
-        return true
     }
 
-    const dequeueBare = (): T | undefined => {
-        if (head === items.length) return undefined
-        const value = removeHead()
-        if (trackStats) dequeuedCount += 1
-        if (highWaterMark !== undefined) {
-            const size = liveSize()
-            const above = size > highWaterMark
-            if (above !== aboveHighWater) aboveHighWater = above
-        }
-        return value
-    }
+    const plain = !trackStats && highWaterMark === undefined
 
-    const tryDequeueBare = (): QueueSlot<T> | undefined => {
-        if (head === items.length) return undefined
-        const value = removeHead()
-        if (trackStats) dequeuedCount += 1
-        if (highWaterMark !== undefined) {
-            const size = liveSize()
-            const above = size > highWaterMark
-            if (above !== aboveHighWater) aboveHighWater = above
-        }
-        return { value }
-    }
+    const takeToBare: (out: { value: T }) => boolean = plain
+        ? (out): boolean => {
+              if (head === items.length) return false
+              out.value = removeHead()
+              return true
+          }
+        : (out): boolean => {
+              if (head === items.length) return false
+              out.value = removeHead()
+              afterBareDequeue()
+              return true
+          }
+
+    const dequeueBare: () => T | undefined = plain
+        ? (): T | undefined => {
+              if (head === items.length) return undefined
+              return removeHead()
+          }
+        : (): T | undefined => {
+              if (head === items.length) return undefined
+              const value = removeHead()
+              afterBareDequeue()
+              return value
+          }
+
+    const tryDequeueBare: () => QueueSlot<T> | undefined = plain
+        ? (): QueueSlot<T> | undefined => {
+              if (head === items.length) return undefined
+              return { value: removeHead() }
+          }
+        : (): QueueSlot<T> | undefined => {
+              if (head === items.length) return undefined
+              const value = removeHead()
+              afterBareDequeue()
+              return { value }
+          }
 
     const clearBare = (): void => {
         if (head === items.length) return
@@ -423,6 +445,7 @@ const buildHeadIndexedQueue = <T>(opts: HeadIndexedOpts): Queue<T> => {
     }
 
     const enqueueLoud = (item: T): void => {
+        if (compactOnNextEnqueue) compactBeforeEnqueue()
         pushItem(item)
         const size = liveSize()
         if (subs!.enqueued > 0) {
