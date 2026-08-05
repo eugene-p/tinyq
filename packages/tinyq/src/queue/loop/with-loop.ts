@@ -6,7 +6,10 @@ import {
     resolveDelayMs,
 } from '../../util/delay-policy.util'
 import { isNonNegativeFinite } from '../../util/number.util'
-import { scheduleTimeout } from '../../util/schedule-timeout.util'
+import {
+    cancelTimeout,
+    scheduleTimeout,
+} from '../../util/schedule-timeout.util'
 import {
     decorateQueue,
     type PreserveQueueExtras,
@@ -19,6 +22,7 @@ import {
 } from '../core/layers.util'
 import type { QueueEvents } from '../core/queue'
 import { getQueueName } from '../core/queue-name.util'
+import { subscribeInternalFailed } from '../worker/internal-failed.util'
 import type { QueueWithWorker, WorkerEvents } from '../worker/with-worker'
 import {
     getLoopHops,
@@ -58,6 +62,11 @@ export type WithLoopOptions<T, U = T> = {
      * the risk of silent loss.
      */
     delay?: DelayPolicy
+    /**
+     * When true, {@link LoopControls.stop} cancels pending delay timers
+     * (items are dropped). Default: false (timers still fire after stop).
+     */
+    cancelDelayedOnStop?: boolean
 }
 
 export type LoopEvents<T, U = T> = {
@@ -131,8 +140,13 @@ const requireLoopDelayMs = (
     return ms
 }
 
+export type LoopControls = {
+    /** Number of items waiting on delay timers (not yet re-enqueued). */
+    pendingDelayedCount: () => number
+}
+
 /**
- * On `worker:failed`, re-enqueue onto the **same** worker queue (failure loop).
+ * On worker failure, re-enqueue onto the **same** worker queue (failure loop).
  *
  * Fair retries: the concurrency slot is released between hops. Prefer
  * {@link import('../../worker/retry').retryWorker} for short in-call retries.
@@ -145,7 +159,8 @@ const requireLoopDelayMs = (
  *
  * Optional `delay` (static ms or `(hops) => ms`) waits before re-enqueue.
  * Pending delays do not occupy queue slots; `loop:enqueued` fires after the item
- * is re-queued. `stop` does not cancel pending delays.
+ * is re-queued. By default `stop` does not cancel pending delays; set
+ * `cancelDelayedOnStop: true` to clear them.
  *
  * **Disclaimer — data loss on exit:** delayed items live only in memory (timer
  * closure), not in the queue. Restart, crash, or process exit loses them with no
@@ -178,6 +193,7 @@ export const withLoop = <
     queue: TQueue & QueueWithWorker<T, R, TEvents>,
     options: WithLoopOptions<T, U> = {},
 ): QueueWithWorker<T, R, LoopQueueEvents<T, U, TEvents, R>> &
+    LoopControls &
     PreserveQueueExtras<TQueue> => {
     if (!hasQueueLayer(queue, WORKER_LAYER)) {
         throw new InvalidQueueCompositionError(
@@ -201,16 +217,15 @@ export const withLoop = <
     const userMap = options.map
     const filter = options.filter ?? (() => true)
     const delayOpt = options.delay
+    const cancelDelayedOnStop = options.cancelDelayedOnStop === true
 
     const inner = queue
     const emitInner = inner.emit as (
         eventName: string,
         data: unknown,
     ) => void
-    const onInner = inner.on as (
-        eventName: string,
-        callback: EventCallback<unknown>,
-    ) => () => void
+
+    const pendingDelays = new Set<unknown>()
 
     const emitLoopError = (item: T, error: unknown, cause: unknown): void => {
         emitInner('loop:error', {
@@ -224,8 +239,14 @@ export const withLoop = <
         })
     }
 
-    onInner('worker:failed', (payload) => {
-        const { item, error } = payload as { item: T; error: unknown }
+    const clearPendingDelays = (): void => {
+        for (const handle of pendingDelays) {
+            cancelTimeout(handle)
+        }
+        pendingDelays.clear()
+    }
+
+    subscribeInternalFailed<T>(inner, ({ item, error }) => {
         try {
             const previousHops = getLoopHops(item, name)
             const hops = (previousHops ?? 0) + 1
@@ -261,8 +282,8 @@ export const withLoop = <
             }
 
             if (wait > 0) {
-                // Timer callbacks must never throw (unhandled async errors).
-                scheduleTimeout(() => {
+                const handle = scheduleTimeout(() => {
+                    pendingDelays.delete(handle)
                     try {
                         reEnqueue()
                     } catch (cause) {
@@ -273,6 +294,7 @@ export const withLoop = <
                         }
                     }
                 }, wait)
+                pendingDelays.add(handle)
                 return
             }
 
@@ -282,13 +304,27 @@ export const withLoop = <
         }
     })
 
-    const api = markQueueLayer(decorateQueue(inner, {}), LOOP_LAYER)
+    const stop = (): void => {
+        if (cancelDelayedOnStop) {
+            clearPendingDelays()
+        }
+        inner.stop()
+    }
+
+    const api = markQueueLayer(
+        decorateQueue(inner, {
+            stop,
+            pendingDelayedCount: () => pendingDelays.size,
+        }),
+        LOOP_LAYER,
+    )
 
     return api as unknown as QueueWithWorker<
         T,
         R,
         LoopQueueEvents<T, U, TEvents, R>
     > &
+        LoopControls &
         PreserveQueueExtras<TQueue>
 }
 

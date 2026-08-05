@@ -191,6 +191,30 @@ describe('buildQueue', () => {
         )
         expect(() => buildQueue({ maxSize: -1 })).toThrow(InvalidQueueOptionError)
         expect(() => buildQueue({ maxSize: 1.5 })).toThrow(InvalidQueueOptionError)
+        expect(() => buildQueue({ maxSize: 2 ** 31 + 1 })).toThrow(
+            InvalidQueueOptionError,
+        )
+    })
+
+    it('rejects invalid overflow values', () => {
+        expect(() =>
+            buildQueue({ maxSize: 2, overflow: 'nope' as 'throw' }),
+        ).toThrow(InvalidQueueOptionError)
+    })
+
+    it('ring capacity stays at least maxSize for non-pow2 sizes', () => {
+        // Exercises nextPowerOfTwo via wrap-around occupancy at maxSize.
+        for (const maxSize of [3, 5, 7, 1000]) {
+            const queue = buildQueue<number>({ maxSize })
+            for (let i = 0; i < maxSize; i += 1) queue.enqueue(i)
+            expect(queue.size()).toBe(maxSize)
+            expect(() => queue.enqueue(maxSize)).toThrow(QueueFullError)
+            expect(queue.dequeue()).toBe(0)
+            queue.enqueue(maxSize)
+            expect(queue.toArray()[0]).toBe(1)
+            expect(queue.toArray().at(-1)).toBe(maxSize)
+            expect(queue.size()).toBe(maxSize)
+        }
     })
 
     it('stores optional logical name (trimmed)', () => {
@@ -307,5 +331,165 @@ describe('buildQueue', () => {
         expect(enqueued).toHaveBeenCalledWith({ item: 'hot', size: 1 })
         expect(queue.dequeue()).toBe('hot')
         expect(dequeued).toHaveBeenCalledWith({ item: 'hot', size: 0 })
+    })
+
+    it('compacts head hole after many steady-size cycles', () => {
+        const queue = buildQueue<number>()
+        queue.enqueue(0)
+        for (let i = 0; i < 10_000; i += 1) {
+            queue.enqueue(i + 1)
+            expect(queue.dequeue()).toBe(i)
+        }
+        expect(queue.size()).toBe(1)
+        expect(queue.peek()).toBe(10_000)
+        // After compaction the live snapshot is a short packed array.
+        expect(queue.toArray()).toEqual([10_000])
+    })
+
+    it('uses ring buffer when maxSize is set (wrap-around preserves FIFO)', () => {
+        const queue = buildQueue<number>({ maxSize: 3 })
+        queue.enqueue(1)
+        queue.enqueue(2)
+        queue.enqueue(3)
+        expect(queue.dequeue()).toBe(1)
+        queue.enqueue(4)
+        expect(queue.toArray()).toEqual([2, 3, 4])
+        expect(queue.dequeue()).toBe(2)
+        expect(queue.dequeue()).toBe(3)
+        expect(queue.dequeue()).toBe(4)
+        expect(queue.isEmpty()).toBe(true)
+    })
+
+    it('ring replaceAll and tryPeek work across wrap', () => {
+        const queue = buildQueue<string>({ maxSize: 4 })
+        queue.replaceAll(['a', 'b'])
+        expect(queue.tryPeek()).toEqual({ value: 'a' })
+        expect(queue.dequeue()).toBe('a')
+        queue.enqueue('c')
+        queue.enqueue('d')
+        expect(queue.toArray()).toEqual(['b', 'c', 'd'])
+    })
+
+    it('overflow dropOldest removes head and accepts the new item', () => {
+        const queue = buildQueue<number>({ maxSize: 2, overflow: 'dropOldest' })
+        const dropped = vi.fn()
+        queue.on('queue:dropped', dropped)
+        queue.enqueue(1)
+        queue.enqueue(2)
+        queue.enqueue(3)
+        expect(queue.toArray()).toEqual([2, 3])
+        expect(dropped).toHaveBeenCalledWith({
+            item: 1,
+            reason: 'oldest',
+            size: 2,
+        })
+    })
+
+    it('overflow dropNewest rejects the new item', () => {
+        const queue = buildQueue<number>({ maxSize: 2, overflow: 'dropNewest' })
+        const dropped = vi.fn()
+        queue.on('queue:dropped', dropped)
+        queue.enqueue(1)
+        queue.enqueue(2)
+        queue.enqueue(3)
+        expect(queue.toArray()).toEqual([1, 2])
+        expect(dropped).toHaveBeenCalledWith({
+            item: 3,
+            reason: 'newest',
+            size: 2,
+        })
+    })
+
+    it('rejects overflow without maxSize', () => {
+        expect(() =>
+            buildQueue({ overflow: 'dropOldest' }),
+        ).toThrow(InvalidQueueOptionError)
+    })
+
+    it('emits queue:pressure when size crosses highWaterMark', () => {
+        const queue = buildQueue<number>({ highWaterMark: 1 })
+        const pressure = vi.fn()
+        queue.on('queue:pressure', pressure)
+        queue.enqueue(1)
+        expect(pressure).not.toHaveBeenCalled()
+        queue.enqueue(2)
+        expect(pressure).toHaveBeenLastCalledWith({
+            size: 2,
+            highWaterMark: 1,
+            above: true,
+        })
+        queue.dequeue()
+        expect(pressure).toHaveBeenLastCalledWith({
+            size: 1,
+            highWaterMark: 1,
+            above: false,
+        })
+    })
+
+    it('emits pressure when clear crosses down from above the mark', () => {
+        for (const queue of [
+            buildQueue<number>({ highWaterMark: 1 }),
+            buildQueue<number>({ maxSize: 4, highWaterMark: 1 }),
+        ]) {
+            const pressure = vi.fn()
+            queue.on('queue:pressure', pressure)
+            queue.enqueue(1)
+            queue.enqueue(2)
+            queue.clear()
+
+            expect(pressure).toHaveBeenLastCalledWith({
+                size: 0,
+                highWaterMark: 1,
+                above: false,
+            })
+        }
+    })
+
+    it('tracks stats when trackStats is true', () => {
+        const queue = buildQueue<number>({ trackStats: true })
+        expect(queue.stats).toBeTypeOf('function')
+        queue.enqueue(1)
+        queue.enqueue(2)
+        queue.dequeue()
+        expect(queue.stats?.()).toMatchObject({
+            size: 1,
+            enqueued: 2,
+            dequeued: 1,
+            failed: 0,
+            completed: 0,
+            active: 0,
+        })
+        expect(queue.stats!().enqueued - queue.stats!().dequeued).toBe(
+            queue.size(),
+        )
+    })
+
+    it('keeps enqueued - dequeued aligned under dropOldest and replaceAll', () => {
+        const queue = buildQueue<number>({
+            maxSize: 2,
+            overflow: 'dropOldest',
+            trackStats: true,
+        })
+        queue.enqueue(1)
+        queue.enqueue(2)
+        queue.enqueue(3)
+        expect(queue.toArray()).toEqual([2, 3])
+        const s1 = queue.stats!()
+        expect(s1.enqueued - s1.dequeued).toBe(s1.size)
+
+        queue.replaceAll([9, 8])
+        const s2 = queue.stats!()
+        expect(s2.size).toBe(2)
+        expect(s2.enqueued - s2.dequeued).toBe(2)
+
+        queue.clear()
+        const s3 = queue.stats!()
+        expect(s3.size).toBe(0)
+        expect(s3.enqueued - s3.dequeued).toBe(0)
+    })
+
+    it('does not expose stats when trackStats is false', () => {
+        const queue = buildQueue<number>()
+        expect(queue.stats).toBeUndefined()
     })
 })

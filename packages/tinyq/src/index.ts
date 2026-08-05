@@ -10,6 +10,7 @@ export {
 export {
     buildQueue,
     DeadLetterEnqueueError,
+    drain,
     getLoopHops,
     getQueueName,
     InvalidDeadLetterOptionError,
@@ -31,15 +32,20 @@ export {
     type DeadLetterEvents,
     type DeadLetterQueueEvents,
     type DeadLetterTarget,
+    type Drainable,
+    type DrainOptions,
     type GracefulStopable,
     type GracefulStopOptions,
     type IdleWaitable,
+    type LoopControls,
     type LoopEvents,
     type LoopMapContext,
     type LoopQueueEvents,
+    type OverflowPolicy,
     type Queue,
     type QueueEvents,
     type QueueSlot,
+    type QueueStats,
     type QueueWithWorker,
     type WhenIdleOptions,
     type WithDeadLetterOptions,
@@ -50,6 +56,12 @@ export {
 } from './queue'
 
 export type { DelayPolicy } from './util/delay-policy.util'
+
+export {
+    exponentialBackoff,
+    InvalidBackoffOptionError,
+    type ExponentialBackoffOptions,
+} from './util/exponential-backoff.util'
 
 export {
     buildTopicRouter,

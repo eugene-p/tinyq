@@ -178,4 +178,55 @@ describe('retryWorker', () => {
             cause,
         })
     })
+
+    it('preserves sync success without returning a thenable', () => {
+        const inner = vi.fn((n: number) => n * 2)
+        const worker = retryWorker(inner, { retries: 0 })
+        const result = worker(21)
+        expect(result).toBe(42)
+        expect(typeof (result as { then?: unknown })?.then).not.toBe(
+            'function',
+        )
+    })
+
+    it('honors AbortSignal during delay', async () => {
+        vi.useFakeTimers()
+        try {
+            const AC = (
+                globalThis as unknown as {
+                    AbortController: new () => {
+                        signal: {
+                            aborted: boolean
+                            reason?: unknown
+                            addEventListener: (
+                                type: string,
+                                listener: () => void,
+                                options?: { once?: boolean },
+                            ) => void
+                            removeEventListener: (
+                                type: string,
+                                listener: () => void,
+                            ) => void
+                        }
+                        abort: (reason?: unknown) => void
+                    }
+                }
+            ).AbortController
+            const ac = new AC()
+            const inner = vi.fn(async () => {
+                throw new Error('fail')
+            })
+            const worker = retryWorker(inner, {
+                retries: 2,
+                delay: 100,
+                signal: ac.signal,
+            })
+            const pending = worker(1)
+            await Promise.resolve()
+            ac.abort(new Error('cancel'))
+            await expect(pending).rejects.toThrow('cancel')
+        } finally {
+            vi.useRealTimers()
+        }
+    })
 })

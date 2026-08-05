@@ -51,11 +51,22 @@ describe('buildTopicRouter', () => {
             { topic: 'orphan.event', data: 1 },
         ])
         expect(router.unmatchedCount()).toBe(1)
+        expect(router.lastUnmatched()).toEqual({
+            topic: 'orphan.event',
+            data: 1,
+        })
         expect(onUnmatched).toHaveBeenCalledWith({
             topic: 'orphan.event',
             data: 1,
             delivered: true,
         })
+    })
+
+    it('skips lastUnmatched retention when trackUnmatched is false', () => {
+        const router = buildTopicRouter({ trackUnmatched: false })
+        expect(router.publish('orphan.event', 1)).toBe(0)
+        expect(router.unmatchedCount()).toBe(1)
+        expect(router.lastUnmatched()).toBeUndefined()
     })
 
     it('isolates target failures and reports them', () => {

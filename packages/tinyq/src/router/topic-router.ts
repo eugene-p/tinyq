@@ -34,6 +34,11 @@ export type UnmatchedTopic = {
 export type BuildTopicRouterOptions = {
     /** Optional destination for publishes that match no binding. */
     unmatchedTarget?: TopicTarget
+    /**
+     * When false, skip retaining {@link TopicRouter.lastUnmatched}.
+     * `unmatchedCount` still increments. Default: true.
+     */
+    trackUnmatched?: boolean
 }
 
 export type TopicRouterEvents = {
@@ -171,6 +176,7 @@ export const buildTopicRouter = (
     const routes: InternalBinding[] = []
     let routeVersion = 0
     let unmatchedTarget = options.unmatchedTarget
+    const trackUnmatched = options.trackUnmatched !== false
     let unmatchedTotal = 0
     let lastUnmatchedRecord: UnmatchedTopic | undefined
     // Routers are commonly used as a pure delivery primitive. Keep the normal
@@ -325,7 +331,9 @@ export const buildTopicRouter = (
         }
 
         unmatchedTotal += 1
-        lastUnmatchedRecord = { topic, data }
+        if (trackUnmatched) {
+            lastUnmatchedRecord = { topic, data }
+        }
         let delivered = false
         if (unmatchedTarget !== undefined) {
             try {

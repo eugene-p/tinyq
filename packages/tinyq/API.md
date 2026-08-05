@@ -12,20 +12,31 @@ buildQueue → withWorker → withLoop / withDlq
 
 ### `buildQueue<T>(options?)`
 
-In-memory FIFO (two-stack, amortised O(1) enq/deq).
+In-memory FIFO (amortised O(1) enq/deq). Unbounded queues use a head-indexed
+array with automatic compaction; `maxSize` uses a fixed power-of-two ring buffer
+(max `maxSize` is `2^31`).
 
 ```ts
-const q = buildQueue<Job>({ maxSize: 10_000, name: 'jobs' })
+const q = buildQueue<Job>({
+  maxSize: 10_000,
+  overflow: 'dropOldest',
+  highWaterMark: 8_000,
+  trackStats: true,
+  name: 'jobs',
+})
 ```
 
 | Option | Default | Notes |
 | --- | --- | --- |
-| `maxSize` | unlimited | Safe integer ≥ 1. `enqueue` / `replaceAll` throw `QueueFullError` when exceeded. |
+| `maxSize` | unlimited | Safe integer 1…`2^31`. At capacity, behavior is controlled by `overflow`. |
+| `overflow` | `'throw'` | Requires `maxSize`. `'throw'` → `QueueFullError`; `'dropOldest'` / `'dropNewest'`. |
+| `highWaterMark` | — | Safe integer ≥ 0. Emits `queue:pressure` when size crosses the mark (both directions). |
+| `trackStats` | `false` | When true, exposes `stats()` with integer counters. |
 | `name` | — | Non-empty trimmed string. Required by `withLoop`. Read with `getQueueName(q)`. |
 
 | Method | Description |
 | --- | --- |
-| `enqueue(item)` | Push to tail. Throws `QueueFullError` when full. |
+| `enqueue(item)` | Push to tail. Full-queue behavior depends on `overflow`. |
 | `dequeue()` | Pop head, or `undefined` if empty. |
 | `peek()` | Head without removing, or `undefined` if empty. |
 | `tryDequeue()` | `{ value }` slot, or `undefined` if empty — safe when `T` may be nullish. |
@@ -35,6 +46,7 @@ const q = buildQueue<Job>({ maxSize: 10_000, name: 'jobs' })
 | `clear()` | Drop all items; emits `queue:cleared`. |
 | `replaceAll(items)` | Replace contents **without** `queue:enqueued` events. Throws if over `maxSize`. |
 | `toArray()` | Head→tail snapshot. |
+| `stats()` | When `trackStats`: `{ size, enqueued, dequeued, failed, completed, active }`. |
 | `on` / `emit` | Typed events (see below). |
 
 **Events** (allocated on first `on` — until then mutators stay on a branch-free bare path):
@@ -45,6 +57,8 @@ const q = buildQueue<Job>({ maxSize: 10_000, name: 'jobs' })
 | `queue:dequeued` | `{ item, size }` |
 | `queue:emptied` | — |
 | `queue:cleared` | `{ removed }` |
+| `queue:dropped` | `{ item, reason: 'oldest' \| 'newest', size }` — non-throw overflow |
+| `queue:pressure` | `{ size, highWaterMark, above }` — size crossed the mark |
 
 **Errors:** `QueueFullError`, `InvalidQueueOptionError`.
 
@@ -58,6 +72,9 @@ Drain a queue with a concurrency-capped worker. Overrides `enqueue` / `replaceAl
 const queue = withWorker(buildQueue<Job>(), async (job) => run(job), {
   concurrency: 4,
   autoStart: true, // default
+  signal,          // optional AbortSignal-like; abort → stop()
+  batchRepump: true, // optional; default auto when concurrency >= 4
+  trackStats: true,
 })
 ```
 
@@ -65,15 +82,21 @@ const queue = withWorker(buildQueue<Job>(), async (job) => run(job), {
 | --- | --- | --- |
 | `concurrency` | `1` | Safe integer ≥ 1. |
 | `autoStart` | `true` | When `false`, call `start()` to begin pumping. |
+| `signal` | — | When aborted, stops taking new items (in-flight still finish). |
+| `batchRepump` | auto (`concurrency >= 4`) | Coalesce async settle re-pumps into one microtask. |
+| `trackStats` | `false` | Expose `stats()` with `completed` / `failed` / `active` (merges queue stats when present). |
 
 | Control | Description |
 | --- | --- |
 | `start()` | Begin taking items. |
 | `stop()` | Stop taking new items; in-flight work finishes. |
 | `gracefulStop(options?)` | `stop` + wait for in-flight (+ optional `flush`). Backlog stays queued. |
+| `drain(options?)` | Run until empty **and** idle (does not stop first). Prefer `timeoutMs`. After abort with remaining work, rejects with `WorkerAbortedError`. |
 | `isRunning()` | Whether the pump may take work. |
 | `isProcessing()` | Whether any item is in flight. |
 | `activeCount()` | In-flight count. |
+| `setConcurrency(n)` / `getConcurrency()` | Change concurrency at runtime. |
+| `stats()` | When tracking is enabled on queue and/or worker. |
 
 | Event | Payload |
 | --- | --- |
@@ -85,6 +108,8 @@ const queue = withWorker(buildQueue<Job>(), async (job) => run(job), {
 | `worker:pump-error` | `{ error }` — unexpected dequeue failure; pump stops until `start()` |
 
 Failed items are **not** re-queued. Handle with `retryWorker`, `withLoop`, `withDlq`, or a `worker:failed` listener.
+
+`withLoop` / `withDlq` observe failures via an **internal** channel so they do not force the user `worker:failed` slow path on successful async jobs. User `worker:failed` listeners still work and still take the slow path.
 
 The pump uses `takeTo` so nullish payloads stay valid and emptiness is structural.
 
@@ -99,6 +124,14 @@ await whenIdle(queue, { timeoutMs: 10_000 })
 ```
 
 Without `timeoutMs` the promise can hang forever (stopped pump with remaining items, stuck job). Prefer a budget — timeout rejects with `LifecycleTimeoutError` (does not cancel work).
+
+### `drain(queue, options?)` / `queue.drain(options?)`
+
+Same idle condition as `whenIdle`, named for the “keep running until empty” lifecycle. Distinct from `gracefulStop`, which stops taking new work first. On a worker queue, `drain` will `start()` if the pump is stopped (unless the worker `signal` is already aborted).
+
+```ts
+await queue.drain({ timeoutMs: 10_000 })
+```
 
 ### `gracefulStop(queue, options?)`
 
@@ -117,11 +150,14 @@ await gracefulStop(queue, { timeoutMs: 5_000, flush: true })
 
 Wrap a worker function for in-call retries. Returns a `WorkerFn` for `withWorker` — does **not** wrap a queue.
 
+When the first attempt returns a non-thenable successfully, the result stays **synchronous** (no outer Promise) so the worker pump can stay on its sync path.
+
 ```ts
 const run = retryWorker(async (job) => callApi(job), {
   retries: 3,                          // total attempts = retries + 1
   delay: (attempt) => attempt * 100,   // ms; or a fixed number
   shouldRetry: (err, attempt) => !(err instanceof FatalError),
+  signal,                              // AbortSignal-like or (item, attempt) => signal
 })
 ```
 
@@ -130,12 +166,15 @@ const run = retryWorker(async (job) => callApi(job), {
 | `retries` | Safe integer ≥ 0. Total attempts = `retries + 1`. |
 | `delay` | `number` or `(attempt) => number` (1-based failed attempt). Finite ≥ 0. |
 | `shouldRetry` | `(error, failedAttempt) => boolean`. Default: always retry. |
+| `signal` | Abort whole sequence, or factory `(item, attempt) => signal` (1-based attempt index). |
 
 **Errors:** `RetryExhaustedError` (`attempts`, `cause`), `InvalidRetryOptionError`.
 
 ### `pipelineWorker(steps)` / `pipelineDone(value)`
 
 Compose steps into a worker function: output of step *n* is input of step *n+1*. Returns a `WorkerFn` for `withWorker`.
+
+Fully synchronous steps return a non-thenable result so the outer worker can stay on its sync path. The first thenable step switches the remainder to async.
 
 ```ts
 const run = pipelineWorker([
@@ -154,7 +193,7 @@ Return `pipelineDone(value)` from a step to finish successfully early (later ste
 
 ### `withLoop(workerQueue, options?)`
 
-On `worker:failed`, re-enqueue onto the **same** worker queue (fair retries: concurrency slot released between hops). Requires a **named** queue: `buildQueue({ name: 'jobs' })`.
+On worker failure, re-enqueue onto the **same** worker queue (fair retries: concurrency slot released between hops). Uses an internal failure channel (does not require a user `worker:failed` subscription). Requires a **named** queue: `buildQueue({ name: 'jobs' })`.
 
 ```ts
 const queue = withLoop(
@@ -163,10 +202,12 @@ const queue = withLoop(
     filter: (item, err, ctx) => ctx.hops <= 5,
     delay: (hops) => hops * 100,
     map: (item, err, ctx) => ({ ...item, lastError: String(err) }),
+    cancelDelayedOnStop: true,
   },
 )
 
 const hops = getLoopHops(item, 'jobs') // item.__tq.loop.jobs.hops
+queue.pendingDelayedCount() // items waiting on delay timers
 ```
 
 | Option | Default | Notes |
@@ -174,6 +215,7 @@ const hops = getLoopHops(item, 'jobs') // item.__tq.loop.jobs.hops
 | `filter` | always | Skip re-enqueue when `false`. |
 | `map` | identity | Remap **original** failed item; library always re-stamps `__tq`. |
 | `delay` | immediate | `number` or `(hops) => number`. **In-memory only** — process exit drops pending delayed items. |
+| `cancelDelayedOnStop` | `false` | When true, `stop()` clears pending delay timers (items dropped). |
 
 Hop meta lives under `item.__tq.loop[name].hops` (`TQ_KEY === '__tq'`). Non-plain payloads become `{ value, __tq: { … } }`.
 
@@ -189,7 +231,7 @@ Prefer `retryWorker` for short in-call retries. Prefer `withDlq` to park failure
 
 ### `withDlq` / `withDeadLetter(source, sink, options?)`
 
-Park `worker:failed` items on a **distinct** sink via `enqueue`. In-memory only — not a durable store.
+Park failed items on a **distinct** sink via `enqueue`. Uses the same internal failure channel as `withLoop` (does not force user `worker:failed` slow path). In-memory only — not a durable store.
 
 ```ts
 const failed = buildQueue<Job>()
@@ -222,7 +264,7 @@ fan-out primitive: it only requires `target.enqueue({ topic, data })`, so a
 target can be a tinyq queue or another compatible destination.
 
 ```ts
-const topics = buildTopicRouter()
+const topics = buildTopicRouter({ trackUnmatched: false })
 topics.bind('orders.*', ordersQueue)
 topics.bind('orders.#', auditQueue)
 topics.publish('orders.created', { id: 'o_1' })
@@ -239,6 +281,7 @@ through `router:error` but does not prevent other matching targets receiving the
 | `unbind(pattern, target?)` / `clear()` | Remove matching bindings / all bindings. |
 | `publish(topic, data)` | Fan out `{ topic, data }`. Invalid or wildcard-containing topics throw `InvalidTopicError`. |
 | `unmatchedTarget` | Optional target for publishes with no matching binding; it does not add to the matched count. |
+| `trackUnmatched` | Default `true`. When `false`, skip retaining `lastUnmatched()` (count still increments). |
 | `unmatchedCount()` / `lastUnmatched()` / `clearUnmatched()` | Inspect or reset unmatched-publish diagnostics. |
 
 | Event | Payload |
@@ -256,6 +299,8 @@ through `router:error` but does not prevent other matching targets receiving the
 | `getLoopHops(item, name)` | Hop count for queue `name`, or `undefined`. |
 | `TQ_KEY` | `'__tq'` — reserved bag for hop meta. |
 | `buildEventEmitter<TEvents>()` | Standalone typed emitter (`on` / `emit`). |
+| `exponentialBackoff({ base, max?, jitter? })` | `DelayPolicy` with exponential growth and optional jitter. |
+| `drain` / `whenIdle` / `gracefulStop` | Lifecycle helpers (also methods on worker queues where applicable). |
 
 ### `DelayPolicy`
 
@@ -266,3 +311,5 @@ type DelayPolicy = number | ((attempt: number) => number)
 ```
 
 Must resolve to a finite number ≥ 0. Only the 1-based attempt/hop count is passed — not the error.
+
+Build with `exponentialBackoff({ base, max, jitter })` when you want capped exponential delays.
