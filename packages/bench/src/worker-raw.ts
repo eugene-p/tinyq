@@ -11,6 +11,7 @@ import {
   WORKER_RAW_CONCURRENCIES,
   WORKER_RAW_JOB_COUNTS,
 } from './helpers.js'
+import { labeledPeer } from './peer-versions.js'
 
 /** 1) workers raw — number jobs, async no-op body */
 
@@ -103,9 +104,9 @@ export const runWorkerRawBench = async (mode: BenchMode): Promise<void> => {
 
       const tasks = [
         { name: '@qkitt/tinyq withWorker', run: () => drainQkitt(jobCount, concurrency) },
-        { name: 'fastq', run: () => drainFastq(jobCount, concurrency) },
-        { name: 'p-queue', run: () => drainPQueue(jobCount, concurrency) },
-        { name: 'async.queue', run: () => drainAsyncQueue(jobCount, concurrency) },
+        { name: labeledPeer('fastq', 'fastq'), run: () => drainFastq(jobCount, concurrency) },
+        { name: labeledPeer('p-queue', 'p-queue'), run: () => drainPQueue(jobCount, concurrency) },
+        { name: labeledPeer('async.queue', 'async'), run: () => drainAsyncQueue(jobCount, concurrency) },
       ]
       const rows = await runTimingTasks(
         isFullBenchMode(mode) ? tasks : [tasks[0]!, tasks[3]!],

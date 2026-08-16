@@ -333,6 +333,28 @@ describe('buildQueue', () => {
         expect(dequeued).toHaveBeenCalledWith({ item: 'hot', size: 0 })
     })
 
+    it('keeps FIFO after a drain-only stretch and later enqueues', () => {
+        const queue = buildQueue<number>()
+        const filled = 3000
+        const drained = 2500
+        for (let i = 0; i < filled; i += 1) queue.enqueue(i)
+        for (let i = 0; i < drained; i += 1) {
+            expect(queue.dequeue()).toBe(i)
+        }
+        expect(queue.toArray()).toEqual(
+            Array.from({ length: filled - drained }, (_, i) => drained + i),
+        )
+        queue.enqueue(filled)
+        queue.enqueue(filled + 1)
+        expect(queue.toArray()).toEqual(
+            Array.from({ length: filled - drained + 2 }, (_, i) => drained + i),
+        )
+        for (let i = drained; i < filled + 2; i += 1) {
+            expect(queue.dequeue()).toBe(i)
+        }
+        expect(queue.isEmpty()).toBe(true)
+    })
+
     it('compacts head hole after many steady-size cycles', () => {
         const queue = buildQueue<number>()
         queue.enqueue(0)

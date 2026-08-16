@@ -55,7 +55,3 @@ examples/**/.data/
 # Local agent 
 AGENTS.md
 
-# Local session / planning scratch (not product docs)
-implementation-tasks.md
-perf-and-gaps.md
-

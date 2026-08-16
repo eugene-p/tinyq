@@ -1,5 +1,6 @@
 /** Memory probe: async.queue. CLI: --jobs N --payload BYTES [--concurrency C] */
 import { queue as asyncQueue } from 'async'
+import { labeledPeer } from '../peer-versions.js'
 import { parseMemArgs, runMemScript, type FillHandle } from './common.js'
 
 const args = parseMemArgs()
@@ -35,7 +36,7 @@ const openPayload = (): FillHandle => {
 }
 
 runMemScript({
-  library: 'async.queue',
+  library: labeledPeer('async.queue', 'async'),
   args,
   open: args.payloadBytes === 0 ? openEmpty : openPayload,
 })

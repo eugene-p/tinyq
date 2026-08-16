@@ -508,4 +508,160 @@ describe('withWorker', () => {
         release()
         await flush(3)
     })
+
+    it('processes every backlog item after saturated in-flight work releases', async () => {
+        const concurrency = 2
+        const backlog = 25
+        const seen: number[] = []
+        const pending: Array<() => void> = []
+
+        const queue = withWorker(
+            buildQueue<number>(),
+            async (item) => {
+                seen.push(item)
+                await new Promise<void>((resolve) => {
+                    pending.push(resolve)
+                })
+            },
+            { concurrency },
+        )
+
+        const total = concurrency + backlog
+        for (let i = 0; i < concurrency; i += 1) queue.enqueue(i)
+        await flush(5)
+        expect(queue.activeCount()).toBe(concurrency)
+        expect(seen).toHaveLength(concurrency)
+
+        for (let i = concurrency; i < total; i += 1) queue.enqueue(i)
+        expect(queue.size()).toBe(backlog)
+        expect(seen).toHaveLength(concurrency)
+
+        const idle = waitForIdle(queue)
+        let done = false
+        void idle.then(() => {
+            done = true
+        })
+        while (!done) {
+            const batch = pending.splice(0)
+            for (const release of batch) release()
+            await flush(4)
+        }
+        await idle
+
+        expect(seen).toEqual(Array.from({ length: total }, (_, i) => i))
+        expect(queue.isEmpty()).toBe(true)
+        expect(queue.isProcessing()).toBe(false)
+    })
+
+    it('processes every sync enqueue and keeps active at 0', () => {
+        const seen: number[] = []
+        const queue = withWorker(buildQueue<number>(), (item) => {
+            seen.push(item)
+        })
+
+        for (let i = 0; i < 50; i += 1) {
+            queue.enqueue(i)
+            expect(queue.activeCount()).toBe(0)
+            expect(queue.isProcessing()).toBe(false)
+        }
+
+        expect(seen).toEqual(Array.from({ length: 50 }, (_, i) => i))
+        expect(queue.isEmpty()).toBe(true)
+    })
+
+    it('does not strand an item enqueued reentrantly from a sync worker', async () => {
+        const seen: number[] = []
+        const queue = withWorker(buildQueue<number>(), (item) => {
+            seen.push(item)
+            if (item === 1) queue.enqueue(2)
+        })
+
+        queue.enqueue(1)
+        await waitForIdle(queue)
+
+        expect(seen).toEqual([1, 2])
+        expect(queue.isEmpty()).toBe(true)
+    })
+
+    it('honors worker listeners added reentrantly during a pump', async () => {
+        const started: number[] = []
+        let queue!: ReturnType<typeof withWorker<number, number>>
+        queue = withWorker(buildQueue<number>(), (item) => {
+            if (item === 1) {
+                queue.on('worker:started', ({ item: startedItem }) => {
+                    started.push(startedItem)
+                })
+            }
+            return item
+        })
+
+        queue.enqueue(1)
+        queue.enqueue(2)
+        await waitForIdle(queue)
+
+        expect(started).toEqual([2])
+    })
+
+    it('does not strand an item enqueued from inside an async worker', async () => {
+        const seen: number[] = []
+        let release!: () => void
+        const gate = new Promise<void>((resolve) => {
+            release = resolve
+        })
+
+        const queue = withWorker(
+            buildQueue<number>(),
+            async (item) => {
+                seen.push(item)
+                if (item === 1) {
+                    await gate
+                    queue.enqueue(2)
+                }
+            },
+            { concurrency: 1 },
+        )
+
+        queue.enqueue(1)
+        await flush(3)
+        expect(seen).toEqual([1])
+        expect(queue.size()).toBe(0)
+        expect(queue.activeCount()).toBe(1)
+
+        release()
+        await waitForIdle(queue)
+
+        expect(seen).toEqual([1, 2])
+        expect(queue.isEmpty()).toBe(true)
+    })
+
+    it('replaceAll pumps replacement items when the worker is running', async () => {
+        const seen: number[] = []
+        const queue = withWorker(buildQueue<number>(), (item) => {
+            seen.push(item)
+        })
+
+        queue.replaceAll([1, 2, 3])
+        await waitForIdle(queue)
+
+        expect(seen).toEqual([1, 2, 3])
+        expect(queue.isEmpty()).toBe(true)
+    })
+
+    it('replaceAll leaves items queued while the worker is stopped', async () => {
+        const worker = vi.fn((item: number) => item)
+        const queue = withWorker(buildQueue<number>(), worker, {
+            autoStart: false,
+        })
+
+        queue.replaceAll([1, 2])
+        await flush(3)
+
+        expect(worker).not.toHaveBeenCalled()
+        expect(queue.toArray()).toEqual([1, 2])
+
+        queue.start()
+        await waitForIdle(queue)
+        expect(worker).toHaveBeenCalledTimes(2)
+        expect(queue.isEmpty()).toBe(true)
+    })
 })

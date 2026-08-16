@@ -33,6 +33,8 @@ npm run bench:router          # 5 only
 | Worker (1–3), default | tinyq, async.queue |
 | Worker (1–3), `bench:full` | tinyq, fastq, p-queue, async.queue |
 
+Installed peer versions print in the suite header and next to each competitor row. Use `@latest` when bumping peers — caret ranges will not pick up a new major (for example `p-queue` 8 → 9).
+
 **Metrics**
 
 | Suite | Timing | Memory |

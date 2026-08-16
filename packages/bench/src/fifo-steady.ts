@@ -98,7 +98,7 @@ export const runFifoSteadyBench = async (_mode: BenchMode): Promise<void> => {
 
   console.log(
     dim(
-      'Heap delta should stay bounded after head compaction (wave 1); without it, backing array grows with cycles.',
+      'Heap delta should stay bounded after head compaction; without it, backing array grows with cycles.',
     ),
   )
   console.log(bold(cyan('done')))

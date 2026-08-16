@@ -7,6 +7,7 @@ import { runWorkerRawBench } from './worker-raw.js'
 import { runWorkerPayloadBench } from './worker-payload.js'
 import { runWorkerWorkBench } from './worker-work.js'
 import type { BenchMode } from './helpers.js'
+import { formatPeerVersionsLine } from './peer-versions.js'
 import { bold, cyan, dim } from './style.js'
 
 const suite = (process.argv[2] ?? 'all').toLowerCase()
@@ -36,6 +37,7 @@ const knownSuites = new Set([
 const main = async (): Promise<void> => {
   console.log(bold(cyan('@qkitt/tinyq-bench')))
   console.log(dim(`Node ${process.version} · suite=${suite} · mode=${mode}`))
+  console.log(dim(`peers  ${formatPeerVersionsLine()}`))
   console.log(
     dim(
       '1 workers raw · 2 payload discard · 3 payload work · 4 fifo · 5 router · worker-loop · fifo-steady · retry-sync',

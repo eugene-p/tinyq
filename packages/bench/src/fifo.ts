@@ -8,6 +8,7 @@ import {
   printTimingTable,
   runTimingTasks,
 } from './helpers.js'
+import { labeledPeer } from './peer-versions.js'
 
 /** 4) fifo raw — enq/deq numbers, no worker */
 export const runFifoBench = async (mode: BenchMode): Promise<void> => {
@@ -23,7 +24,7 @@ export const runFifoBench = async (mode: BenchMode): Promise<void> => {
       },
     },
     {
-      name: 'denque',
+      name: labeledPeer('denque', 'denque'),
       run: () => {
       const q = new Denque<number>()
       for (let i = 0; i < FIFO_N; i++) q.push(i)
@@ -31,7 +32,7 @@ export const runFifoBench = async (mode: BenchMode): Promise<void> => {
       },
     },
     {
-      name: 'yocto-queue',
+      name: labeledPeer('yocto-queue', 'yocto-queue'),
       run: () => {
       const q = new Queue<number>()
       for (let i = 0; i < FIFO_N; i++) q.enqueue(i)

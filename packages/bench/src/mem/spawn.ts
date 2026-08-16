@@ -4,6 +4,7 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { MemRow } from '../memory.js'
+import { labeledPeer } from '../peer-versions.js'
 import type { MemResult } from './common.js'
 
 const MEM_DIR = path.dirname(fileURLToPath(import.meta.url))
@@ -13,9 +14,9 @@ const TSX_CLI = require.resolve('tsx/cli')
 
 export const MEM_LIBRARIES = [
   { id: 'tinyq', script: 'tinyq.ts', library: '@qkitt/tinyq withWorker' },
-  { id: 'fastq', script: 'fastq.ts', library: 'fastq' },
-  { id: 'p-queue', script: 'p-queue.ts', library: 'p-queue' },
-  { id: 'async-queue', script: 'async-queue.ts', library: 'async.queue' },
+  { id: 'fastq', script: 'fastq.ts', library: labeledPeer('fastq', 'fastq') },
+  { id: 'p-queue', script: 'p-queue.ts', library: labeledPeer('p-queue', 'p-queue') },
+  { id: 'async-queue', script: 'async-queue.ts', library: labeledPeer('async.queue', 'async') },
 ] as const
 
 export type MemSpawnOptions = {
@@ -102,7 +103,7 @@ export const measureAllIsolated = async (
   for (const lib of MEM_LIBRARIES) {
     const result = await spawnOne(lib.script, options)
     rows.push({
-      name: result.library,
+      name: lib.library,
       heapDelta: result.heapDelta,
       heapPerItem: result.heapPerItem,
     })

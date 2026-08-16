@@ -1,5 +1,6 @@
 /** Memory probe: p-queue. CLI: --jobs N --payload BYTES [--concurrency C] */
 import PQueue from 'p-queue'
+import { labeledPeer } from '../peer-versions.js'
 import { parseMemArgs, runMemScript, type FillHandle } from './common.js'
 
 const args = parseMemArgs()
@@ -36,7 +37,7 @@ const openPayload = (): FillHandle => {
 }
 
 runMemScript({
-  library: 'p-queue',
+  library: labeledPeer('p-queue', 'p-queue'),
   args,
   open: args.payloadBytes === 0 ? openEmpty : openPayload,
 })

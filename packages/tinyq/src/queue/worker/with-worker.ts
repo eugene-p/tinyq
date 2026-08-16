@@ -478,12 +478,12 @@ export const withWorker = <
 
     const enqueue = (item: T): void => {
         inner.enqueue(item)
-        pump()
+        if (!running || active < concurrency) pump()
     }
 
     const replaceAll = (items: readonly T[]): void => {
         inner.replaceAll(items)
-        pump()
+        if (!running || active < concurrency) pump()
     }
 
     if (autoStart && !options.signal?.aborted) {

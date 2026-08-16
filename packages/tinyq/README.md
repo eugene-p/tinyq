@@ -171,6 +171,8 @@ Composition: `buildQueue` → `withWorker` → `withLoop` / `withDlq`. Pass `ret
 
 Worker drain leads in-process peers (async.queue, fastq, p-queue) on jobs/s and retained heap; bare FIFO trails denque / yocto-queue on pure enq/deq.
 
+Latest local snapshot (Node v26.5.0, Windows, 2026-08-15): `withWorker` reached 12.09M jobs/s at 20k jobs/c=1 and 11.16M jobs/s at c=4. Peers: `async` 3.2.6 · `fastq` 1.20.1 · `p-queue` 9.3.3. See the [full benchmark tables](https://github.com/eugene-p/tinyq#benchmarks).
+
 Re-run from the monorepo: `npm run bench` · harness: [`@qkitt/tinyq-bench`](https://github.com/eugene-p/tinyq/tree/main/packages/bench).
 
 ## License

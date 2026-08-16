@@ -8,6 +8,7 @@ import {
   printTimingTable,
   runTimingTasks,
 } from './helpers.js'
+import { labeledPeer } from './peer-versions.js'
 
 const DRAIN_TIMEOUT_MS = 120_000
 
@@ -136,9 +137,9 @@ export const runPayloadDrainMatrix = async (options: {
       name: '@qkitt/tinyq withWorker',
       run: () => drainQkitt(jobs, concurrency, body, label),
     },
-    { name: 'fastq', run: () => drainFastq(jobs, concurrency, body) },
-    { name: 'p-queue', run: () => drainPQueue(jobs, concurrency, body) },
-    { name: 'async.queue', run: () => drainAsyncQueue(jobs, concurrency, body) },
+    { name: labeledPeer('fastq', 'fastq'), run: () => drainFastq(jobs, concurrency, body) },
+    { name: labeledPeer('p-queue', 'p-queue'), run: () => drainPQueue(jobs, concurrency, body) },
+    { name: labeledPeer('async.queue', 'async'), run: () => drainAsyncQueue(jobs, concurrency, body) },
   ]
   const rows = await runTimingTasks(
     isFullBenchMode(mode) ? tasks : [tasks[0]!, tasks[3]!],

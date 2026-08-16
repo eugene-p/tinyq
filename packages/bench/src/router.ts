@@ -7,7 +7,7 @@ import {
 } from './helpers.js'
 
 const PUBLISHES = 100_000
-/** Extra scales for exact-binding lookup cost (wave 0.4). */
+/** Extra scales for exact-binding lookup cost. */
 const EXACT_BINDING_COUNTS = [1, 100, 1000] as const
 
 const target = { enqueue: (_message: unknown): void => {} }
@@ -63,7 +63,7 @@ export const runRouterBench = async (mode: BenchMode): Promise<void> => {
   )
   printTimingTable(rows, { jobCount: PUBLISHES })
 
-  // 0.4 — exact bindings at realistic scale (last binding is the hit).
+  // Exact bindings at realistic scale (last binding is the hit).
   for (const bindings of EXACT_BINDING_COUNTS) {
     printHeader(
       `0.4) topic router — ${bindings} exact bindings, publish last × ${PUBLISHES.toLocaleString()}`,
